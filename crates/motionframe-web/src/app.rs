@@ -109,22 +109,12 @@ impl Platform for WebPlatform {
         color_atlas: &ImageRgba8,
         motion_atlas: &ImageRgba8,
         metadata_json: &str,
-    ) {
+    ) -> Result<(), String> {
         // Encode atlases to TGA in-memory, then download three files.
-        let color_tga = match motionframe_engine::io::tga::encode_tga_bytes(color_atlas) {
-            Ok(b) => b,
-            Err(e) => {
-                log::error!("encode color tga: {e}");
-                return;
-            }
-        };
-        let motion_tga = match motionframe_engine::io::tga::encode_tga_bytes(motion_atlas) {
-            Ok(b) => b,
-            Err(e) => {
-                log::error!("encode motion tga: {e}");
-                return;
-            }
-        };
+        let color_tga = motionframe_engine::io::tga::encode_tga_bytes(color_atlas)
+            .map_err(|e| format!("encode color tga: {e}"))?;
+        let motion_tga = motionframe_engine::io::tga::encode_tga_bytes(motion_atlas)
+            .map_err(|e| format!("encode motion tga: {e}"))?;
         let prefix = if prefix.is_empty() { "output" } else { prefix };
         bridge::trigger_download(
             &format!("{prefix}_color_atlas.tga"),
@@ -141,6 +131,7 @@ impl Platform for WebPlatform {
             metadata_json.as_bytes(),
             "application/json",
         );
+        Ok(())
     }
 
     fn start_generation(

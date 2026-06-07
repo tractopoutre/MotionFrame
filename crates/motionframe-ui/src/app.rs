@@ -467,12 +467,14 @@ impl<P: Platform> MotionFrameApp<P> {
                 return;
             }
         };
-        self.platform.save_outputs(
+        if let Err(e) = self.platform.save_outputs(
             &self.default_save_name,
             &result.color_atlas,
             &result.motion_atlas,
             &json,
-        );
+        ) {
+            self.error_banner = Some(fmt(t(self.lang, Key::ErrSaveOutputs), &[&e]));
+        }
     }
 }
 
@@ -866,7 +868,9 @@ impl<P: Platform> MotionFrameApp<P> {
             if let (Some(ref result), Some(ref opts)) = (&self.result, &self.result_options) {
                 let (_atlas_cols, atlas_rows) = opts.atlas_dims;
                 let frame_width = opts.tile_pixel_width;
-                let frame_height = result.atlas_height / atlas_rows;
+                // Guard against a degenerate persisted/zero atlas grid: a 0 row
+                // count would divide-by-zero (panic) here.
+                let frame_height = result.atlas_height / atlas_rows.max(1);
                 let viz_img = arrows::draw_optical_flow_atlas(
                     &result.flows,
                     &result.color_atlas,

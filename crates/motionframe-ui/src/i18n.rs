@@ -143,6 +143,7 @@ pub enum Key {
     ErrCouldNotDecodeWith,
     ErrMetadataSerialize,
     ErrWorkerPanic,
+    ErrSaveOutputs,
     ClearSelection,
 }
 
@@ -309,6 +310,7 @@ pub const fn t(lang: Lang, key: Key) -> &'static str {
         (Lang::En, Key::ErrCouldNotDecodeWith) => "Could not decode '{0}': {1}",
         (Lang::En, Key::ErrMetadataSerialize) => "Metadata serialize failed: {0}",
         (Lang::En, Key::ErrWorkerPanic) => "worker panic: {0}",
+        (Lang::En, Key::ErrSaveOutputs) => "Save failed: {0}",
         (Lang::En, Key::ClearSelection) => "×",
 
         // Sidebar — Input
@@ -465,6 +467,7 @@ pub const fn t(lang: Lang, key: Key) -> &'static str {
         (Lang::Ja, Key::ErrCouldNotDecodeWith) => "'{0}' をデコードできませんでした: {1}",
         (Lang::Ja, Key::ErrMetadataSerialize) => "メタデータのシリアライズに失敗しました: {0}",
         (Lang::Ja, Key::ErrWorkerPanic) => "ワーカースレッドが異常終了しました: {0}",
+        (Lang::Ja, Key::ErrSaveOutputs) => "保存に失敗しました: {0}",
         (Lang::Ja, Key::ClearSelection) => "×",
     }
 }
@@ -599,6 +602,7 @@ mod tests {
         Key::ErrCouldNotDecodeWith,
         Key::ErrMetadataSerialize,
         Key::ErrWorkerPanic,
+        Key::ErrSaveOutputs,
         Key::ClearSelection,
     ];
 
@@ -697,6 +701,7 @@ mod tests {
             | Key::ErrCouldNotDecodeWith
             | Key::ErrMetadataSerialize
             | Key::ErrWorkerPanic
+            | Key::ErrSaveOutputs
             | Key::ClearSelection => {}
         }
     }

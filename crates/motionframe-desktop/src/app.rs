@@ -197,14 +197,14 @@ impl Platform for DesktopPlatform {
         color_atlas: &ImageRgba8,
         motion_atlas: &ImageRgba8,
         metadata_json: &str,
-    ) {
+    ) -> Result<(), String> {
         let mut dialog =
             rfd::FileDialog::new().set_title(t(self.initial_lang, Key::SaveOutputsDialogTitle));
         if !prefix.is_empty() {
             dialog = dialog.set_file_name(prefix);
         }
         let Some(path) = dialog.save_file() else {
-            return;
+            return Ok(()); // user cancelled — nothing to report
         };
         let prefix_path = path.with_extension("");
         let prefix_str = prefix_path
@@ -216,21 +216,15 @@ impl Platform for DesktopPlatform {
         let motion_path = dir.join(format!("{prefix_str}_motion_atlas.tga"));
         let meta_path = dir.join(format!("{prefix_str}_meta.json"));
 
-        if let Err(e) = motionframe_engine::io::tga::save_tga(&color_path, color_atlas) {
-            log::error!(
-                "failed to save color atlas to {}: {e}",
-                color_path.display()
-            );
-        }
-        if let Err(e) = motionframe_engine::io::tga::save_tga(&motion_path, motion_atlas) {
-            log::error!(
-                "failed to save motion atlas to {}: {e}",
-                motion_path.display()
-            );
-        }
-        if let Err(e) = std::fs::write(&meta_path, metadata_json) {
-            log::error!("failed to save metadata to {}: {e}", meta_path.display());
-        }
+        // Fail on the first error so a read-only dir / full disk surfaces to the
+        // user instead of looking like a successful save.
+        motionframe_engine::io::tga::save_tga(&color_path, color_atlas)
+            .map_err(|e| format!("{}: {e}", color_path.display()))?;
+        motionframe_engine::io::tga::save_tga(&motion_path, motion_atlas)
+            .map_err(|e| format!("{}: {e}", motion_path.display()))?;
+        std::fs::write(&meta_path, metadata_json)
+            .map_err(|e| format!("{}: {e}", meta_path.display()))?;
+        Ok(())
     }
 
     fn start_generation(
@@ -259,18 +253,40 @@ impl Platform for DesktopPlatform {
         if let Some(ref f) = self.cancel_flag {
             f.store(true, Ordering::Relaxed);
         }
-        if let Some(handle) = self.worker_thread.take() {
-            let _ = handle.join();
-        }
+        // Detach the worker (drop the handle) rather than join()ing on the UI
+        // thread: joining would freeze the window until the worker reaches its
+        // next cancel checkpoint. The worker observes the flag and exits on its
+        // own; its result is discarded because we drop the receiver.
+        self.worker_thread = None;
         self.gen_rx = None;
         self.cancel_flag = None;
     }
 
     fn handle_dropped_files(&mut self, dropped: Vec<egui::DroppedFile>) -> Vec<EncodedFrame> {
-        let Some(first) = dropped.into_iter().find_map(|d| d.path) else {
-            return Vec::new();
-        };
-        Self::collect_sequence_bytes(&first).unwrap_or_default()
+        let mut paths: Vec<std::path::PathBuf> =
+            dropped.into_iter().filter_map(|d| d.path).collect();
+        match paths.len() {
+            0 => Vec::new(),
+            // A single dropped path: a folder is walked, and a lone file
+            // triggers sequence detection from its siblings (drag one frame to
+            // load the whole detected sequence).
+            1 => Self::collect_sequence_bytes(&paths[0]).unwrap_or_default(),
+            // Multiple explicit files: load exactly those (sorted by name),
+            // instead of dir-scanning from the first and ignoring the rest.
+            _ => {
+                paths.sort();
+                let mut out = Vec::with_capacity(paths.len());
+                for p in &paths {
+                    if p.is_dir() {
+                        continue;
+                    }
+                    if let Some(frame) = Self::load_single(p) {
+                        out.extend(frame);
+                    }
+                }
+                out
+            }
+        }
     }
 }
 

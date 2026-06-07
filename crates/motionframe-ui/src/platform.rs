@@ -61,13 +61,17 @@ pub trait Platform: 'static {
     /// Trigger a save flow for the given outputs.
     /// - Desktop: shows a save dialog, then writes 3 files.
     /// - Web: triggers downloads with default names.
+    ///
+    /// Returns `Err` with a human-readable message if saving failed, so the UI
+    /// can surface it instead of silently dropping the output. `Ok(())` also
+    /// covers the user cancelling the dialog (nothing to report).
     fn save_outputs(
         &mut self,
         prefix: &str,
         color_atlas: &ImageRgba8,
         motion_atlas: &ImageRgba8,
         metadata_json: &str,
-    );
+    ) -> Result<(), String>;
 
     /// Begin a generation run with the given frames + options.
     /// Events are produced via [`take_generation_event`] as the worker runs.
