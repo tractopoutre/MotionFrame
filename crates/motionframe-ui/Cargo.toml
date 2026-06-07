@@ -1,0 +1,20 @@
+[package]
+name = "motionframe-ui"
+version = "2.0.0"
+edition = "2021"
+rust-version = "1.95"
+description = "MotionFrame egui widget toolkit: options panel, tabs, playback, output"
+license = "GPL-3.0-only"
+
+[lib]
+name = "motionframe_ui"
+path = "src/lib.rs"
+
+[dependencies]
+motionframe-engine = { path = "../motionframe-engine", default-features = false, features = ["preview"] }
+eframe = { version = "=0.34.2", default-features = false, features = ["default_fonts", "wgpu", "persistence"] }
+egui  = "=0.34.2"
+serde = { version = "=1.0.228", features = ["derive"] }
+
+[lints]
+workspace = true

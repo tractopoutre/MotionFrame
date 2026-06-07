@@ -1,7 +1,6 @@
-.venv
-__pycache__
-sample
-*.app
-*.dist
-*.plist
-.idea
+/target/
+/crates/motionframe-web-worker/pkg/
+/crates/motionframe-web/dist/
+/crates/motionframe-web/static/worker/
+.DS_Store
+**/.DS_Store

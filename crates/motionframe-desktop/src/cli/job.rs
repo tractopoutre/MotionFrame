@@ -1,0 +1,274 @@
+use std::path::PathBuf;
+
+use motionframe_engine::pipeline::atlas_layout::{pick_layout, DEFAULT_PADDING_BOUND};
+use motionframe_engine::pipeline::output_detents::{build_output_count_detents, DetentEntry};
+use motionframe_engine::pipeline::run::predict_resize_height;
+use motionframe_engine::pipeline::{GenerateOptions, Interpolation, MotionVectorEncoding};
+
+use crate::cli::config::{
+    CliConfig, LayoutMode, MotionVectorEncodingArg, ProgressMode, ResizeAlgorithmArg,
+};
+use crate::cli::CliError;
+
+/// Whether the input is a directory sequence or a single atlas file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceKind {
+    DirectorySequence,
+    SingleAtlas,
+}
+
+/// Resolved atlas layout strategy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputLayout {
+    Auto,
+    Manual { cols: u32, rows: u32 },
+}
+
+/// Validated single conversion job, ready for execution.
+///
+/// Created from a merged `CliConfig` via `from_config`. Post-load resolution
+/// (`resolve_after_load`) finalizes atlas dimensions once source geometry is known.
+#[derive(Debug, Clone)]
+pub struct ConvertJob {
+    pub input: PathBuf,
+    pub output: PathBuf,
+    pub overwrite: bool,
+    pub source_kind: SourceKind,
+    pub layout: OutputLayout,
+    pub progress: ProgressMode,
+    pub options: GenerateOptions,
+    pub requested_output_count: Option<u32>,
+}
+
+impl ConvertJob {
+    pub fn from_config(cfg: CliConfig) -> Result<Self, CliError> {
+        let input = cfg
+            .input
+            .ok_or_else(|| CliError::Argument("--input <path> is required".into()))?;
+        let output = cfg
+            .output
+            .ok_or_else(|| CliError::Argument("--output <prefix> is required".into()))?;
+
+        let source_kind = classify_source(&input)?;
+        validate_input_atlas_dims(source_kind, cfg.input_atlas_cols, cfg.input_atlas_rows)?;
+
+        let layout = match cfg.layout.unwrap_or(LayoutMode::Auto) {
+            LayoutMode::Auto => {
+                if cfg.atlas_cols.is_some() || cfg.atlas_rows.is_some() {
+                    return Err(CliError::Argument(
+                        "--atlas-cols and --atlas-rows require --layout manual".into(),
+                    ));
+                }
+                OutputLayout::Auto
+            }
+            LayoutMode::Manual => {
+                let cols = cfg.atlas_cols.ok_or_else(|| {
+                    CliError::Argument(
+                        "manual layout requires both --atlas-cols and --atlas-rows".into(),
+                    )
+                })?;
+                let rows = cfg.atlas_rows.ok_or_else(|| {
+                    CliError::Argument(
+                        "manual layout requires both --atlas-cols and --atlas-rows".into(),
+                    )
+                })?;
+                if cols == 0 || rows == 0 {
+                    return Err(CliError::Argument(
+                        "manual layout cols and rows must be greater than zero".into(),
+                    ));
+                }
+                OutputLayout::Manual { cols, rows }
+            }
+        };
+
+        let max_dim = cfg.max_atlas_dim.unwrap_or(8192);
+        if !matches!(max_dim, 1024 | 2048 | 4096 | 8192) {
+            return Err(CliError::Argument(
+                "max-atlas-dim must be one of 1024, 2048, 4096, 8192".into(),
+            ));
+        }
+
+        let mut options = GenerateOptions::default();
+        options.tile_pixel_width = cfg.tile_width.unwrap_or(options.tile_pixel_width);
+        options.output_atlas_max_dim = max_dim;
+        options.is_loop = cfg.is_loop.unwrap_or(options.is_loop);
+        options.trim_tail_for_exact_output_count = cfg
+            .trim_tail
+            .unwrap_or(options.trim_tail_for_exact_output_count);
+        options.premultiplied_alpha = cfg.premultiply_color.unwrap_or(options.premultiplied_alpha);
+        options.stagger_pack = cfg.stagger_pack.unwrap_or(options.stagger_pack);
+        options.analyze_skipped_frames = cfg
+            .analyze_skipped_frames
+            .unwrap_or(options.analyze_skipped_frames);
+        options.halve_motion_vector = cfg
+            .halve_motion_vector
+            .unwrap_or(options.halve_motion_vector);
+        options.temporal_smoothing = cfg
+            .temporal_smoothing
+            .unwrap_or(options.temporal_smoothing)
+            .clamp(0.0, 1.0);
+        options.extrude = cfg.extrude.unwrap_or(options.extrude);
+        options.resize_algorithm = match cfg.resize_algorithm {
+            Some(ResizeAlgorithmArg::Nearest) => Interpolation::Nearest,
+            Some(ResizeAlgorithmArg::Linear) => Interpolation::Linear,
+            Some(ResizeAlgorithmArg::Cubic) | None => Interpolation::Cubic,
+            Some(ResizeAlgorithmArg::Lanczos) => Interpolation::Lanczos,
+        };
+        options.input_atlas_dims = cfg.input_atlas_cols.zip(cfg.input_atlas_rows);
+        options.motion_vector_encoding = match cfg.motion_vector_encoding {
+            Some(MotionVectorEncodingArg::Staggered) | None => MotionVectorEncoding::R8G8Remap01,
+            Some(MotionVectorEncodingArg::Normal) => MotionVectorEncoding::SidefxLabsR8G8,
+        };
+
+        Ok(Self {
+            input,
+            output,
+            overwrite: cfg.overwrite.unwrap_or(false),
+            source_kind,
+            layout,
+            progress: cfg.progress.unwrap_or(ProgressMode::Auto),
+            options,
+            requested_output_count: cfg.output_count,
+        })
+    }
+
+    /// Resolve output count and atlas layout after source dimensions are known.
+    pub fn resolve_after_load(
+        &mut self,
+        source_width: u32,
+        source_height: u32,
+        effective_frame_count: u32,
+    ) -> Result<(), CliError> {
+        if effective_frame_count < 2 {
+            return Err(CliError::Argument(
+                "effective input frame count must be at least 2".into(),
+            ));
+        }
+
+        let output_count = self.resolve_output_count(effective_frame_count)?;
+        let output_tile_height =
+            predict_resize_height(source_height, source_width, self.options.tile_pixel_width);
+
+        match self.layout {
+            OutputLayout::Auto => {
+                let layout = pick_layout(
+                    output_count,
+                    self.options.tile_pixel_width,
+                    output_tile_height,
+                    self.options.output_atlas_max_dim,
+                    DEFAULT_PADDING_BOUND,
+                )
+                .ok_or_else(|| {
+                    CliError::Argument(format!(
+                        "auto layout cannot fit {output_count} output frames at {}x{} tiles under max-atlas-dim {}",
+                        self.options.tile_pixel_width,
+                        output_tile_height,
+                        self.options.output_atlas_max_dim
+                    ))
+                })?;
+                self.options.atlas_dims = (layout.cols, layout.rows);
+            }
+            OutputLayout::Manual { cols, rows } => {
+                let slots = cols.saturating_mul(rows);
+                if slots < output_count {
+                    return Err(CliError::Argument(format!(
+                        "manual layout has {slots} slots, but output-count requires {output_count} frames"
+                    )));
+                }
+                if cols.saturating_mul(self.options.tile_pixel_width)
+                    > self.options.output_atlas_max_dim
+                    || rows.saturating_mul(output_tile_height) > self.options.output_atlas_max_dim
+                {
+                    return Err(CliError::Argument(format!(
+                        "manual layout {}x{} exceeds max-atlas-dim {}",
+                        cols, rows, self.options.output_atlas_max_dim
+                    )));
+                }
+                self.options.atlas_dims = (cols, rows);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn resolve_output_count(&mut self, effective_frame_count: u32) -> Result<u32, CliError> {
+        let Some(requested) = self.requested_output_count else {
+            self.options.frame_skip = 0;
+            self.options.output_frames = effective_frame_count;
+            return Ok(effective_frame_count);
+        };
+
+        let detents = build_output_count_detents(
+            effective_frame_count,
+            self.options.trim_tail_for_exact_output_count,
+        );
+        let Some(entry) = detents.iter().find(|entry| entry.output_count == requested) else {
+            let nearby = nearby_counts(&detents, requested);
+            return Err(CliError::Argument(format!(
+                "output-count {requested} is not valid for {effective_frame_count} effective input frames; nearby valid counts: {nearby}"
+            )));
+        };
+        self.options.frame_skip = entry.frame_skip;
+        self.options.output_frames = entry.output_count;
+        Ok(entry.output_count)
+    }
+}
+
+fn classify_source(input: &PathBuf) -> Result<SourceKind, CliError> {
+    let meta = std::fs::metadata(input).map_err(CliError::Io)?;
+    if meta.is_dir() {
+        Ok(SourceKind::DirectorySequence)
+    } else if meta.is_file() {
+        Ok(SourceKind::SingleAtlas)
+    } else {
+        Err(CliError::Argument(format!(
+            "input path is neither a directory nor a file: {}",
+            input.display()
+        )))
+    }
+}
+
+fn validate_input_atlas_dims(
+    source_kind: SourceKind,
+    cols: Option<u32>,
+    rows: Option<u32>,
+) -> Result<(), CliError> {
+    match source_kind {
+        SourceKind::DirectorySequence => {
+            if cols.is_some() || rows.is_some() {
+                return Err(CliError::Argument(
+                    "directory input rejects input atlas dimensions".into(),
+                ));
+            }
+        }
+        SourceKind::SingleAtlas => {
+            let Some(cols) = cols else {
+                return Err(CliError::Argument(
+                    "single-file input requires --input-atlas-cols and --input-atlas-rows".into(),
+                ));
+            };
+            let Some(rows) = rows else {
+                return Err(CliError::Argument(
+                    "single-file input requires --input-atlas-cols and --input-atlas-rows".into(),
+                ));
+            };
+            if cols == 0 || rows == 0 {
+                return Err(CliError::Argument(
+                    "input atlas cols and rows must be greater than zero".into(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn nearby_counts(detents: &[DetentEntry], requested: u32) -> String {
+    let mut counts: Vec<u32> = detents.iter().map(|entry| entry.output_count).collect();
+    counts.sort_by_key(|count| count.abs_diff(requested));
+    counts
+        .into_iter()
+        .take(3)
+        .map(|count| count.to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
+}

@@ -1,0 +1,78 @@
+[package]
+name = "motionframe-web"
+version = "2.0.0"
+edition = "2021"
+rust-version = "1.95"
+description = "MotionFrame web app (eframe on wasm)"
+license = "GPL-3.0-only"
+build = "build.rs"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[build-dependencies]
+miniz_oxide = "=0.9.1"
+
+[dependencies]
+# Engine WITH preview. The maxInterStageShaderComponents Chrome WebGPU compat
+# issue that previously forced glow-only was resolved in wgpu 23 and persists
+# in current wgpu.
+motionframe-engine = { path = "../motionframe-engine", default-features = false, features = ["preview"] }
+motionframe-ui     = { path = "../motionframe-ui" }
+eframe = { version = "=0.34.2", default-features = false, features = ["default_fonts", "wgpu", "persistence"] }
+egui = "=0.34.2"
+egui-wgpu = "=0.34.2"
+wgpu = "=29.0.3"
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.149"
+serde-wasm-bindgen = "=0.6.5"
+wasm-bindgen = "=0.2.121"
+wasm-bindgen-futures = "=0.4.71"
+js-sys = "=0.3.98"
+console_error_panic_hook = "=0.1.7"
+console_log = "=1.0.0"
+log = "=0.4.29"
+serde_bytes = "=0.11.19"
+image = { version = "=0.25.10", default-features = false, features = ["tga", "png"] }
+miniz_oxide = "=0.9.1"
+
+[dependencies.web-sys]
+version = "=0.3.98"
+features = [
+    "Blob",
+    "BlobPropertyBag",
+    "DataTransfer",
+    "DataTransferItem",
+    "DataTransferItemList",
+    "Document",
+    "DragEvent",
+    "Element",
+    "Event",
+    "EventTarget",
+    "File",
+    "FileList",
+    "FileReader",
+    "FileSystemDirectoryEntry",
+    "FileSystemDirectoryReader",
+    "FileSystemEntry",
+    "FileSystemFileEntry",
+    "HtmlAnchorElement",
+    "HtmlCanvasElement",
+    "HtmlInputElement",
+    "MessageEvent",
+    "Navigator",
+    "Storage",
+    "Url",
+    "Window",
+    "Worker",
+    "WorkerOptions",
+    "WorkerType",
+    "console",
+]
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }

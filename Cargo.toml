@@ -1,0 +1,50 @@
+[workspace]
+members = [
+    "crates/motionframe-engine",
+    "crates/motionframe-ui",
+    "crates/motionframe-desktop",
+    "crates/motionframe-web-worker",
+    "crates/motionframe-web",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.95"
+license = "GPL-3.0-only"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+unused = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+lint_groups_priority = "allow"
+module_name_repetitions = "allow"
+# Hot-path math (Farneback poly expand/update, atlas resample, run.rs interp):
+# `a * b + c` is validated against the OpenCV reference fixtures (parity tests
+# in tests/flow_parity.rs and tests/pipeline_parity.rs). Switching to `mul_add`
+# would change rounding. Leave the explicit form.
+suboptimal_flops = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+must_use_candidate = "allow"
+cast_possible_truncation = "allow"
+cast_precision_loss = "allow"
+cast_sign_loss = "allow"
+similar_names = "allow"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+
+[profile.release.package."motionframe-engine"]
+opt-level = 3
+
+[profile.release.package."motionframe-web-worker"]
+opt-level = 3

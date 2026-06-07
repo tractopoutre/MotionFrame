@@ -1,0 +1,7 @@
+{
+  "private": true,
+  "scripts": {
+    "build:web": "cd crates/motionframe-web && env -u NO_COLOR trunk build --release",
+    "serve:web": "bash scripts/serve-web.sh"
+  }
+}

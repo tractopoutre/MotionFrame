@@ -1,0 +1,37 @@
+[build]
+target = "index.html"
+dist = "dist"
+release = true
+
+# wasm-bindgen-rayon needs SharedArrayBuffer, which requires the page to be
+# cross-origin isolated. Production sets these via crates/motionframe-web/_headers
+# (Cloudflare). For local `trunk serve` we have to emit them ourselves.
+[serve]
+port = 8080
+headers = { "Cross-Origin-Opener-Policy" = "same-origin", "Cross-Origin-Embedder-Policy" = "require-corp" }
+
+# Trunk's watcher defaults to the manifest dir, so edits to sibling crates
+# (motionframe-ui, motionframe-engine, motionframe-web-worker) won't trigger
+# a rebuild. List each src/ explicitly so the dev loop covers the full
+# workspace. Setting `watch` REPLACES the default, so include this crate's
+# src/Cargo.toml too. The pre_build hook regenerates `static/worker/` on
+# every build (worker wasm + JS glue) — without ignoring it, those writes
+# look like source changes and trigger an infinite reload loop.
+[watch]
+watch = [
+    "src",
+    "Cargo.toml",
+    "index.html",
+    "../motionframe-ui/src",
+    "../motionframe-ui/Cargo.toml",
+    "../motionframe-engine/src",
+    "../motionframe-engine/Cargo.toml",
+    "../motionframe-web-worker/src",
+    "../motionframe-web-worker/Cargo.toml",
+]
+ignore = ["static/worker"]
+
+[[hooks]]
+stage = "pre_build"
+command = "bash"
+command_arguments = ["-c", "cd ../.. && bash scripts/build-web-worker.sh"]

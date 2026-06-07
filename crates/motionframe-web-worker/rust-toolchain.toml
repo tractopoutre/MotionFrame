@@ -1,0 +1,8 @@
+# This crate is pinned to nightly because the build needs `-Z build-std` to
+# rebuild std with `+atomics` (so wasm-bindgen-rayon's threaded pool works in
+# the browser worker). `-Z build-std` is unstable, so it's nightly-only.
+# The rest of the workspace stays on stable 1.95 (see /rust-toolchain.toml).
+[toolchain]
+channel = "nightly-2026-04-15"
+components = ["rust-src"]
+targets = ["wasm32-unknown-unknown"]

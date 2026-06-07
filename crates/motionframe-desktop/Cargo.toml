@@ -1,0 +1,40 @@
+[package]
+name = "motionframe-desktop"
+version = "2.0.0"
+edition = "2021"
+rust-version = "1.95"
+description = "MotionFrame desktop application (egui + wgpu)"
+license = "GPL-3.0-only"
+build = "build.rs"
+
+[[bin]]
+name = "motionframe"
+path = "src/main.rs"
+
+[lib]
+name = "motionframe_desktop"
+path = "src/lib.rs"
+
+[build-dependencies]
+miniz_oxide = "=0.9.1"
+
+[dependencies]
+motionframe-engine = { path = "../motionframe-engine" }
+motionframe-ui     = { path = "../motionframe-ui" }
+eframe       = { version = "=0.34.2", default-features = false, features = ["default_fonts", "wgpu", "persistence"] }
+egui         = "=0.34.2"
+rfd          = "=0.17.2"
+log          = "=0.4.29"
+env_logger   = "=0.11.10"
+clap         = { version = "=4.6.1", features = ["derive"] }
+serde        = { version = "=1.0.228", features = ["derive"] }
+toml         = "=1.1.2+spec-1.1.0"
+miniz_oxide  = "=0.9.1"
+sys-locale   = "=0.3.2"
+skrifa       = "=0.42.1"
+
+[dev-dependencies]
+serde_json = "=1.0.149"
+
+[lints]
+workspace = true

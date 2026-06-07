@@ -1,0 +1,20 @@
+## Linked Libraries
+
+License text for every library linked into MotionFrame.
+
+---
+
+{{#each licenses}}{{#each used_by}}### {{crate.name}} {{crate.version}}
+
+License: {{../name}}{{#if crate.repository}}
+Repository: {{crate.repository}}{{/if}}{{#if crate.description}}
+
+{{{crate.description}}}{{/if}}
+
+```text
+{{{../text}}}
+```
+
+---
+
+{{/each}}{{/each}}

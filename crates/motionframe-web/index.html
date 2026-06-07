@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>MotionFrame Web</title>
+  <link data-trunk rel="copy-dir" href="static/" />
+  <link data-trunk rel="copy-file" href="_headers" />
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; background: #15171a; color: #ddd; font-family: system-ui, sans-serif; }
+    #spinner { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1rem; }
+    #spinner .ring { width: 48px; height: 48px; border: 4px solid #444; border-top-color: #69f; border-radius: 50%; animation: spin 0.8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #blocker { position: fixed; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 0.75rem; padding: 2rem; text-align: center; }
+    #blocker h1 { font-size: 1.5rem; margin: 0; }
+    #blocker p { max-width: 32rem; margin: 0; line-height: 1.5; }
+    #motionframe_canvas { display: block; width: 100vw; height: 100vh; }
+  </style>
+</head>
+<body>
+  <div id="spinner"><div class="ring"></div><div>Loading MotionFrame…</div></div>
+  <div id="blocker">
+    <h1>WebGPU required</h1>
+    <p>MotionFrame Web needs a browser with WebGPU support. Please use the latest Chrome, Edge, Safari, or Firefox — or download the desktop application.</p>
+  </div>
+  <canvas id="motionframe_canvas"></canvas>
+  <script type="module">
+    if (!('gpu' in navigator)) {
+      document.getElementById('spinner').style.display = 'none';
+      document.getElementById('motionframe_canvas').style.display = 'none';
+      document.getElementById('blocker').style.display = 'flex';
+    } else {
+      // Hide spinner once egui paints (best-effort: poll for canvas content)
+      const hide = () => { const s = document.getElementById('spinner'); if (s) s.remove(); };
+      window.addEventListener('motionframe:ready', hide, { once: true });
+      // Also hide after 5s as a fallback
+      setTimeout(hide, 5000);
+    }
+  </script>
+  <link data-trunk rel="rust" data-wasm-opt="4" data-wasm-opt-params="--enable-bulk-memory --enable-mutable-globals --enable-simd --enable-nontrapping-float-to-int --enable-sign-ext" />
+</body>
+</html>

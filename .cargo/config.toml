@@ -1,0 +1,5 @@
+[target.wasm32-unknown-unknown]
+# Note: +atomics is added (via env RUSTFLAGS) only for the web worker build —
+# see scripts/build-web-worker.sh. Adding it here breaks wasm-opt for the main
+# motionframe-web crate (Trunk doesn't pass --enable-threads).
+rustflags = ["-C", "target-feature=+simd128,+bulk-memory,+mutable-globals"]

@@ -1,10 +1,11 @@
 # MotionFrame
 
-> MotionFrame has been rewritten in Rust. This Python implementation is no longer maintained. The final Python source is preserved on the `legacy-python` branch and the `python-final` tag.
+**MotionFrame** is a Rust tool for generating motion-vector textures for
+flipbook animation. It analyzes an image sequence, computes optical flow,
+accumulates sub-frame motion, and writes color and motion atlases that a
+runtime shader can sample for smoother playback with fewer texture frames.
 
-**MotionFrame** is a Python tool designed to analyze flipbook images and generate motion vector textures for use with motion blend shaders.
-
-The problem with flipbook textures is that the texture size becomes very large if you want smooth animation. The motion blend technique makes animation smoother with fewer frames by providing an extra motion vector texture.
+The project includes a desktop application plus a command-line converter.
 
 ## Sample Renders
 
@@ -12,16 +13,18 @@ The problem with flipbook textures is that the texture size becomes very large i
 | -------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
 | ![Explosion Fade](https://github.com/user-attachments/assets/00159a36-f49e-4593-9221-0b4c80ca4113) | ![Explosion Motion](https://github.com/user-attachments/assets/239eac78-90b2-4018-bd08-68a8148c7642) |
 | ![Smoke Fade](https://github.com/user-attachments/assets/e20742f8-35bc-403d-8da0-a7d2397d7e89)     | ![Smoke Motion](https://github.com/user-attachments/assets/c9e847f7-06a3-452e-b592-bc7e0b674782)     |
+
 ## Key Features
 
 - **GUI Frontend**
-- **Cross-Platform**:
-  - Supports macOS, Windows, and likely Linux.
-- **Skipped Frame Analysis**:
+- **Batch Conversion CLI**
+- **Cross-Platform**
+  - Supports macOS, Windows, and Linux.
+- **Skipped Frame Analysis**
   - Enhances motion analysis precision with high frame rate input.
   - Analyzes every input frame and accumulates skipped frames into each motion vector frame.
-  - Ideal for animations with fast movements, which are challenging for image-based motion analysis.
-- **Motion Vector [Stagger Packing](https://realtimevfx.com/t/flipbook-texture-packing-atlas-super-pack-and-stagger-pack/5609)**:
+  - Useful for fast movement that is difficult for image-based motion analysis.
+- **Motion Vector [Stagger Packing](https://realtimevfx.com/t/flipbook-texture-packing-atlas-super-pack-and-stagger-pack/5609)**
   - Motion vector textures use 2 channels, but this may not be optimal for some platforms.
   - Packing them into 4 channels reduces texture size by half and compresses well with formats like ASTC.
 - **Color Atlas Packing**
@@ -36,88 +39,110 @@ See the [reference shader implementation (MIT)](https://github.com/aki-null/Unit
 
 [Releases](https://github.com/aki-null/MotionFrame/releases)
 
-### Setup
+### Build from Source
 
-#### Windows
+Install the pinned Rust toolchain, then build:
 
 ```bash
 git clone https://github.com/aki-null/MotionFrame.git
 cd MotionFrame
-python -m venv .venv
-source .venv/Scripts/activate
-cd app
-pip install -r requirements.txt
-python3 MotionFrame.py
+cargo build --release --bin motionframe
 ```
 
-#### macOS
+The desktop binary is written to:
 
-```bash
-git clone https://github.com/aki-null/MotionFrame.git
-cd MotionFrame
-python -m venv .venv
-source .venv/bin/activate
-cd app
-pip install -r requirements.txt
-python3 MotionFrame.py
+```text
+target/release/motionframe
 ```
 
 ## Usage
 
+Launch the desktop application:
+
+```bash
+cargo run --release --bin motionframe
+```
+
 ![Main Window](https://github.com/user-attachments/assets/d44658e8-3a2d-4908-afb1-a22fbbed1fde)
 
-- Drag and drop image sequence file
-	- Folder works too
-	- The tool tries its best to determine how your image sequence file names are formatted
-- Configure options
-	- Frame skips are important if your input frame count is not exactly the same as the desired output frames
-	- The output motion vector quality improves if you can provide more input frames
-- Generate
-	- The tabs on the right displays various output
-	- Visualization tab shows how the tool interpreted the motion in each frame with arrows
-- Save to files
-	- The output is in TGA
-	- Color, motion vector, and JSON metadata are exported
+Convert one image sequence or atlas from the command line:
+
+```bash
+cargo run --release --bin motionframe -- convert \
+  --input frames/explosion \
+  --output out/explosion \
+  --output-count 64 \
+  --layout auto
+```
+
+The CLI writes:
+
+- `<prefix>_color_atlas.tga`
+- `<prefix>_motion_atlas.tga`
+- `<prefix>_meta.json`
+
+Use `motionframe convert --help` for all conversion options.
+
+## Migration from Python MotionFrame
+
+MotionFrame is now a Rust application. The previous Python implementation is
+archived on the `legacy-python` branch and the `python-final` tag.
+
+MotionFrame 2.0 is a Rust rewrite of the original Python application.
+
+### What changed
+
+- Desktop application and CLI are built from Rust.
+- Optical flow and atlas generation are implemented in the Rust engine.
+- Runtime dependencies are no longer installed through Python.
+- The previous Python implementation is archived on the `legacy-python` branch and the `python-final` tag.
+
+### Compatibility
+
+Existing image-sequence workflows should map to the Rust CLI and desktop app.
+Output quality and performance are expected to improve. If a script depended
+on Python internals, migrate it to the `motionframe` CLI.
+
+### Legacy source
+
+Use these refs for the old Python implementation:
+
+- `legacy-python`
+- `python-final`
+- `v1.0.0-python-final`
+
+## Toolchain
+
+Stable Rust 1.95 is pinned in `rust-toolchain.toml`.
+
+## Verification
+
+```bash
+./scripts/verify.sh        # fmt + clippy + test + release build + web build + license check
+./scripts/verify-quick.sh  # fmt + clippy + tests
+./scripts/verify-parity.sh # flow + atlas pipeline parity tests
+```
 
 ## License
 
 [GPL v3.0](https://www.gnu.org/licenses/gpl-3.0.txt)
 
-```
-MotionFrame
-Copyright (C) 2024  Akihiro Noguchi
-
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
-
-You should have received a copy of the GNU General Public License
-along with this program.  If not, see <https://www.gnu.org/licenses/>.
-```
-
-- Downloading this tool and using the generated texture for your game doesn't contaminate your software with GPL v3.0 license. I would be happy if you credit me though :)
+MotionFrame is licensed under GPL v3.0. Third-party notices are listed in
+`THIRD-PARTY-NOTICES.md`.
 
 ## Notes
 
-- Make sure you import the motion vector texture as linear (non-sRGB) in your game engine
-	- In Unity, uncheck sRGB (Color Textire) in texture settings
-- The output includes a JSON file which contains some metadata that are useful for various shader parameters
-	- You can take a look at the JSON file if you forget some properties of the output like the motion strength and total number of frames
+Downloading this tool and using generated textures for your game does not
+contaminate your software with GPL v3.0.
 
 ## Appendix
 
-Textures used to render the sample animations.
+Generated atlases:
 
-|Color Atlas|Motion Atlas|
-|-----------|------------|
-|![Explosion Color Atlas](https://github.com/user-attachments/assets/f68db0fe-9348-4ae3-bffa-cb2839ddc5a8)|![Explosion Motion Atlas](https://github.com/user-attachments/assets/5354ece8-0127-43a0-8b90-a9d358bab4e5)|
-|![Smoke Color Atlas](https://github.com/user-attachments/assets/8bcb4457-e245-4f93-a1aa-4ec88763777f)|![Smoke Motion Atlas](https://github.com/user-attachments/assets/66e98695-c152-40ad-9aad-8b098f963d09)|
+| Color Atlas                                                                                       | Motion Atlas                                                                                       |
+| ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| ![Explosion Color Atlas](https://github.com/user-attachments/assets/f68db0fe-9348-4ae3-bffa-cb2839ddc5a8) | ![Explosion Motion Atlas](https://github.com/user-attachments/assets/5354ece8-0127-43a0-8b90-a9d358bab4e5) |
+| ![Smoke Color Atlas](https://github.com/user-attachments/assets/8bcb4457-e245-4f93-a1aa-4ec88763777f)     | ![Smoke Motion Atlas](https://github.com/user-attachments/assets/66e98695-c152-40ad-9aad-8b098f963d09)     |
 
 ## References
 

@@ -1,0 +1,40 @@
+name: web-smoke
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Stable for the workspace; nightly with rust-src for the wasm worker
+      # (wasm-bindgen-rayon needs `-Z build-std`). Keep toolchain versions in
+      # sync with /rust-toolchain.toml and crates/motionframe-web-worker/rust-toolchain.toml.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.95.0
+          targets: wasm32-unknown-unknown
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-04-15
+          components: rust-src
+          targets: wasm32-unknown-unknown
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry
+            target
+          key: web-smoke-${{ runner.os }}-nightly-2026-04-15-${{ hashFiles('Cargo.lock') }}
+      - name: Install trunk + wasm-pack
+        run: |
+          cargo install --locked trunk --version 0.21.7
+          cargo install --locked wasm-pack --version 0.14.0
+      - name: Build web bundle
+        run: bash scripts/build-web.sh
+      - name: Verify desktop still builds
+        run: cargo check --workspace --all-features
+      - name: Run engine tests
+        run: cargo test -p motionframe-engine
