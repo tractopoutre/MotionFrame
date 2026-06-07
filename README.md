@@ -1,5 +1,7 @@
 # MotionFrame
 
+> MotionFrame has been rewritten in Rust. This Python implementation is no longer maintained. The final Python source is preserved on the `legacy-python` branch and the `python-final` tag.
+
 **MotionFrame** is a Python tool designed to analyze flipbook images and generate motion vector textures for use with motion blend shaders.
 
 The problem with flipbook textures is that the texture size becomes very large if you want smooth animation. The motion blend technique makes animation smoother with fewer frames by providing an extra motion vector texture.
