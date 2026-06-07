@@ -25,6 +25,13 @@ pub enum AtlasError {
         cols: u32,
         rows: u32,
     },
+    #[error("image buffer length {len} does not match dimensions {w}x{h} (expected {expected})")]
+    BufferLengthMismatch {
+        w: u32,
+        h: u32,
+        len: usize,
+        expected: usize,
+    },
 }
 
 /// Slice an atlas image into row-major sub-tiles (origin top-left, left to
@@ -39,6 +46,20 @@ pub fn slice_atlas(src: &ImageRgba8, cols: u32, rows: u32) -> Result<Vec<ImageRg
     };
     if cols == 0 || rows == 0 || tile_count < 2 {
         return Err(AtlasError::TooFewTiles { cols, rows });
+    }
+
+    // `pixel_rgba` indexes `src.data` assuming `width * height * 4` bytes; a
+    // truncated or hand-built source would otherwise panic with an OOB index.
+    let expected = (src.width as usize)
+        .checked_mul(src.height as usize)
+        .and_then(|n| n.checked_mul(4));
+    if expected != Some(src.data.len()) {
+        return Err(AtlasError::BufferLengthMismatch {
+            w: src.width,
+            h: src.height,
+            len: src.data.len(),
+            expected: expected.unwrap_or(usize::MAX),
+        });
     }
 
     let tile_w = div_round(src.width, cols);
@@ -61,7 +82,7 @@ pub fn slice_atlas(src: &ImageRgba8, cols: u32, rows: u32) -> Result<Vec<ImageRg
             let y1 = f64::from(row + 1) * f64::from(src.height) / f64::from(rows);
             let scale_x = (x1 - x0) / f64::from(tile_w);
             let scale_y = (y1 - y0) / f64::from(tile_h);
-            let mut data = Vec::with_capacity((tile_w * tile_h * 4) as usize);
+            let mut data = Vec::with_capacity((tile_w as usize) * (tile_h as usize) * 4);
 
             for ty in 0..tile_h {
                 for tx in 0..tile_w {
@@ -82,6 +103,7 @@ pub fn slice_atlas(src: &ImageRgba8, cols: u32, rows: u32) -> Result<Vec<ImageRg
 }
 
 fn div_round(n: u32, d: u32) -> u32 {
+    debug_assert!(d != 0, "div_round divisor must be non-zero");
     n / d + u32::from(n % d >= d.div_ceil(2))
 }
 

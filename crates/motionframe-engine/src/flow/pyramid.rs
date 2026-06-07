@@ -24,7 +24,11 @@ pub fn compute_num_levels(width: u32, height: u32, levels: u32, pyr_scale: f32) 
         }
         k += 1;
     }
-    k.max(1)
+    // Matches OpenCV's `levels = k`: may be 0 (base level only) for images that
+    // can't be downscaled while staying >= min_size. The driver loops `0..=k`,
+    // so it still processes at least the base level. The previous `.max(1)`
+    // forced a spurious below-min_size level on small / extreme-aspect frames.
+    k
 }
 
 /// Build a blurred + resized image for a specific pyramid level.

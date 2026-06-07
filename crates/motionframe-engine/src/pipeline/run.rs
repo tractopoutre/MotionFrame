@@ -340,7 +340,9 @@ pub fn run_pipeline(
         return Err(PipelineError::Cancelled);
     }
     let motion_vector_width = if opts.halve_motion_vector {
-        (opts.tile_pixel_width / 2) * atlas_cols
+        // Floor the per-tile width to 1 px so a tiny tile_pixel_width can't
+        // produce a zero-width (empty) motion atlas.
+        (opts.tile_pixel_width / 2).max(1) * atlas_cols
     } else {
         opts.tile_pixel_width * atlas_cols
     };
@@ -433,8 +435,9 @@ pub fn predict_resize_height(height: u32, width: u32, new_width: u32) -> u32 {
     }
 
     if width < new_width {
-        // Upscale: single step
-        return height * new_width / width;
+        // Upscale: single step. u64 intermediate avoids u32 overflow on large
+        // height * new_width before the divide.
+        return (u64::from(height) * u64::from(new_width) / u64::from(width)) as u32;
     }
 
     // Downscale: iterative halving

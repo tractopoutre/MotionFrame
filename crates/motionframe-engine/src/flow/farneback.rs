@@ -87,7 +87,7 @@ pub fn farneback(frame1: &ImageF32, frame2: &ImageF32, params: &FarnebackParams)
         }
     }
 
-    flow.unwrap() // can't fail: loop runs at least once (num_levels >= 1)
+    flow.unwrap() // can't fail: loop runs at least once (0..=num_levels, num_levels >= 0)
 }
 
 /// Upsample a flow field to target dimensions using bilinear interpolation.

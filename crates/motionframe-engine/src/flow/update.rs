@@ -555,7 +555,10 @@ fn sample_poly_bilinear(poly: &PolyImage, fx: f32, fy: f32, w: usize, h: usize) 
 /// For winsize=15 this gives sigma=2.1, narrower than `getGaussianKernel`'s 2.6.
 fn build_gaussian_1d(winsize: u32) -> Vec<f32> {
     let n = winsize as usize;
-    let sigma = f64::from(winsize / 2) * 0.3;
+    // winsize <= 1 gives sigma = 0, which makes the exp() argument 0/0 = NaN and
+    // poisons the whole flow field. Floor sigma to the value winsize=2 already
+    // yields, so a degenerate window produces a finite (near-delta) kernel.
+    let sigma = (f64::from(winsize / 2) * 0.3).max(0.3);
     let half = (n as f64 - 1.0) / 2.0;
 
     let mut kernel = vec![0.0f64; n];

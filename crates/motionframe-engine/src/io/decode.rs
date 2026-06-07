@@ -2,6 +2,22 @@
 
 use crate::pipeline::ImageRgba8;
 
+/// Cap on a decoded image's dimensions and allocation. Bounds the work a
+/// malformed or hostile image (e.g. a header declaring 60000x60000) can force
+/// before any dimension check runs. 16384 px/axis covers any realistic
+/// flipbook atlas; the alloc cap is a backstop for compressed bombs.
+const MAX_IMAGE_DIM: u32 = 16_384;
+const MAX_IMAGE_ALLOC: u64 = 512 * 1024 * 1024;
+
+/// Build the shared decode limits applied to every reader.
+fn decode_limits() -> image::Limits {
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_IMAGE_DIM);
+    limits.max_image_height = Some(MAX_IMAGE_DIM);
+    limits.max_alloc = Some(MAX_IMAGE_ALLOC);
+    limits
+}
+
 /// Pick the image format from the filename extension.
 ///
 /// TGA's magic bytes are in the file footer (not the header), so
@@ -25,7 +41,9 @@ pub fn decode_image_from_bytes(name: &str, bytes: &[u8]) -> Result<ImageRgba8, S
     let format =
         format_from_name(name).ok_or_else(|| format!("unsupported image extension: {name}"))?;
     let cursor = std::io::Cursor::new(bytes);
-    let img = image::ImageReader::with_format(cursor, format)
+    let mut reader = image::ImageReader::with_format(cursor, format);
+    reader.limits(decode_limits());
+    let img = reader
         .decode()
         .map_err(|e| format!("decode failed for {name}: {e}"))?
         .to_rgba8();
@@ -43,7 +61,9 @@ pub fn peek_dimensions_from_bytes(name: &str, bytes: &[u8]) -> Result<(u32, u32)
     let format =
         format_from_name(name).ok_or_else(|| format!("unsupported image extension: {name}"))?;
     let cursor = std::io::Cursor::new(bytes);
-    image::ImageReader::with_format(cursor, format)
+    let mut reader = image::ImageReader::with_format(cursor, format);
+    reader.limits(decode_limits());
+    reader
         .into_dimensions()
         .map_err(|e| format!("dimension peek failed for {name}: {e}"))
 }
