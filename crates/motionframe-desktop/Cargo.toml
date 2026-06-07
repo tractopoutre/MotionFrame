@@ -22,7 +22,7 @@ miniz_oxide = "=0.9.1"
 [dependencies]
 motionframe-engine = { path = "../motionframe-engine" }
 motionframe-ui     = { path = "../motionframe-ui" }
-eframe       = { version = "=0.34.2", default-features = false, features = ["default_fonts", "wgpu", "persistence"] }
+eframe       = { version = "=0.34.2", default-features = false, features = ["default_fonts", "wgpu", "persistence", "x11", "wayland"] }
 egui         = "=0.34.2"
 rfd          = "=0.17.2"
 log          = "=0.4.29"

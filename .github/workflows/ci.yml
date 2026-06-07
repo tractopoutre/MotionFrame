@@ -33,8 +33,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libxkbcommon-dev \
-            libwayland-dev libxcb1-dev libxkbcommon-x11-dev
+          sudo apt-get install -y libwayland-dev libxkbcommon-dev
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   test:
@@ -47,8 +46,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libxkbcommon-dev \
-            libwayland-dev libxcb1-dev libxkbcommon-x11-dev
+          sudo apt-get install -y libwayland-dev libxkbcommon-dev
       - run: cargo test --workspace --all-features
 
   deny:
@@ -78,7 +76,6 @@ jobs:
       - if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libxkbcommon-dev \
-            libwayland-dev libxcb1-dev libxkbcommon-x11-dev
+          sudo apt-get install -y libwayland-dev libxkbcommon-dev
       - run: cargo build -p motionframe-desktop --release
 
