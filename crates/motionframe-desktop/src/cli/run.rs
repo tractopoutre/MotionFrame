@@ -107,6 +107,8 @@ fn write_outputs(output_prefix: &Path, result: &EncodeResult) -> Result<(), CliE
         total_frames: result.total_frames,
         atlas_width: result.atlas_width,
         atlas_height: result.atlas_height,
+        columns: result.columns,
+        rows: result.rows,
         pack_mode: result.pack_mode,
         is_loop: result.is_loop,
         premultiplied_alpha: result.premultiplied_alpha,

@@ -46,6 +46,8 @@ pub struct DoneMeta {
     pub total_frames: u32,
     pub atlas_width: u32,
     pub atlas_height: u32,
+    pub columns: u32,
+    pub rows: u32,
     pub pack_mode: PackModeMsg,
     pub is_loop: bool,
     pub premultiplied_alpha: bool,

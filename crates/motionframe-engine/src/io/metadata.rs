@@ -1,8 +1,8 @@
 //! Atlas metadata (JSON) written alongside the TGA atlases.
 //!
-//! Six fields form a cross-tool contract: shaders use `strength` to
-//! denormalize motion vectors, and `pack_mode`/`loop`/`atlas_width`/`atlas_height`
-//! determine tile addressing. See DESIGN.md § "JSON metadata schema".
+//! These fields form a cross-tool contract: shaders use `strength` to
+//! denormalize motion vectors, and `pack_mode`/`loop`/`columns`/`rows`
+//! determine tile addressing (frame i → col `i % columns`, row `i / columns`).
 
 use std::path::Path;
 
@@ -15,6 +15,10 @@ pub struct AtlasMetadata {
     pub total_frames: u32,
     pub atlas_width: u32,
     pub atlas_height: u32,
+    /// Number of tile columns in the atlas grid (tiles along X).
+    pub columns: u32,
+    /// Number of tile rows in the atlas grid (tiles along Y).
+    pub rows: u32,
     pub pack_mode: PackMode,
     #[serde(rename = "loop")]
     pub is_loop: bool,
@@ -45,6 +49,8 @@ pub fn build_metadata_json(
         total_frames: result.total_frames,
         atlas_width: result.atlas_width,
         atlas_height: result.atlas_height,
+        columns: result.columns,
+        rows: result.rows,
         pack_mode: result.pack_mode,
         is_loop: result.is_loop,
         premultiplied_alpha: result.premultiplied_alpha,
@@ -63,8 +69,10 @@ mod tests {
         let meta = AtlasMetadata {
             strength: 0.123_456_78,
             total_frames: 64,
-            atlas_width: 8,
-            atlas_height: 8,
+            atlas_width: 1024,
+            atlas_height: 1024,
+            columns: 8,
+            rows: 8,
             pack_mode: PackMode::Staggered,
             is_loop: false,
             premultiplied_alpha: false,
@@ -73,6 +81,8 @@ mod tests {
         assert!(json.contains("\"loop\": false"));
         assert!(json.contains("\"pack_mode\": \"staggered\""));
         assert!(json.contains("\"total_frames\": 64"));
+        assert!(json.contains("\"columns\": 8"));
+        assert!(json.contains("\"rows\": 8"));
     }
 
     #[test]
@@ -82,6 +92,8 @@ mod tests {
             total_frames: 1,
             atlas_width: 1,
             atlas_height: 1,
+            columns: 1,
+            rows: 1,
             pack_mode: PackMode::Normal,
             is_loop: false,
             premultiplied_alpha: false,

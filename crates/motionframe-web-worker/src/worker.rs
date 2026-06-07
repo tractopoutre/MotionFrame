@@ -162,6 +162,8 @@ fn post_done(encode_result: &motionframe_engine::pipeline::run::EncodeResult) {
         total_frames: encode_result.total_frames,
         atlas_width: encode_result.atlas_width,
         atlas_height: encode_result.atlas_height,
+        columns: encode_result.columns,
+        rows: encode_result.rows,
         pack_mode,
         is_loop: encode_result.is_loop,
         premultiplied_alpha: encode_result.premultiplied_alpha,

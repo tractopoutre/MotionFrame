@@ -29,6 +29,10 @@ pub struct EncodeResult {
     pub atlas_width: u32,
     /// Atlas height in pixels.
     pub atlas_height: u32,
+    /// Number of tile columns in the atlas grid (tiles along X).
+    pub columns: u32,
+    /// Number of tile rows in the atlas grid (tiles along Y).
+    pub rows: u32,
     /// Pack mode applied.
     pub pack_mode: PackMode,
     /// Whether the sequence loops.
@@ -385,6 +389,8 @@ pub fn run_pipeline(
         total_frames: total_output_frames as u32,
         atlas_width: opts.tile_pixel_width * atlas_cols,
         atlas_height: atlas_pixel_height,
+        columns: atlas_cols,
+        rows: atlas_rows,
         pack_mode,
         is_loop: opts.is_loop,
         premultiplied_alpha: opts.premultiplied_alpha,
