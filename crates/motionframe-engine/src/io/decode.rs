@@ -2,12 +2,15 @@
 
 use crate::pipeline::ImageRgba8;
 
-/// Cap on a decoded image's dimensions and allocation. Bounds the work a
-/// malformed or hostile image (e.g. a header declaring 60000x60000) can force
-/// before any dimension check runs. 16384 px/axis covers any realistic
-/// flipbook atlas; the alloc cap is a backstop for compressed bombs.
+/// Cap on a decoded image's dimensions. Bounds the work a malformed or hostile
+/// image (e.g. a header declaring 60000x60000) can force before any dimension
+/// check runs. 16384 px/axis covers any realistic flipbook atlas.
 const MAX_IMAGE_DIM: u32 = 16_384;
-const MAX_IMAGE_ALLOC: u64 = 512 * 1024 * 1024;
+/// Allocation cap, derived from the dimension cap so the dimension limit is the
+/// single binding constraint: any image within `MAX_IMAGE_DIM` decodes, and the
+/// cap stays a backstop for compressed bombs that declare small dims but
+/// allocate huge intermediates. `16384² * 4 bytes (RGBA) = 1 GiB`.
+const MAX_IMAGE_ALLOC: u64 = (MAX_IMAGE_DIM as u64) * (MAX_IMAGE_DIM as u64) * 4;
 
 /// Build the shared decode limits applied to every reader.
 fn decode_limits() -> image::Limits {
