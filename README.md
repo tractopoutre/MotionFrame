@@ -7,6 +7,8 @@ runtime shader can sample for smoother playback with fewer texture frames.
 
 The project includes a desktop application plus a command-line converter.
 
+**Try it in your browser: [motionframe.aki-null.net](https://motionframe.aki-null.net)**
+
 ## Sample Renders
 
 | Fade Blend                                                                                         | Motion Blend                                                                                         |
