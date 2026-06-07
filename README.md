@@ -5,7 +5,7 @@ flipbook animation. It analyzes an image sequence, computes optical flow,
 accumulates sub-frame motion, and writes color and motion atlases that a
 runtime shader can sample for smoother playback with fewer texture frames.
 
-The project includes a desktop application plus a command-line converter.
+The project includes a desktop application, a command-line converter, and a web version.
 
 **Try it in your browser: [motionframe.aki-null.net](https://motionframe.aki-null.net)**
 
@@ -87,17 +87,15 @@ Use `motionframe convert --help` for all conversion options.
 
 ## Migration from Python MotionFrame
 
-MotionFrame is now a Rust application. The previous Python implementation is
-archived on the `legacy-python` branch and the `python-final` tag.
-
-MotionFrame 2.0 is a Rust rewrite of the original Python application.
+MotionFrame 2.0 is a Rust rewrite of the original Python application. The
+previous Python implementation is archived on the `legacy-python` branch and
+the `python-final` tag.
 
 ### What changed
 
 - Desktop application and CLI are built from Rust.
 - Optical flow and atlas generation are implemented in the Rust engine.
 - Runtime dependencies are no longer installed through Python.
-- The previous Python implementation is archived on the `legacy-python` branch and the `python-final` tag.
 
 ### Compatibility
 
