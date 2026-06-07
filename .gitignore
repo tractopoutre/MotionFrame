@@ -4,3 +4,7 @@
 /crates/motionframe-web/static/worker/
 .DS_Store
 **/.DS_Store
+
+# macOS packaging outputs (scripts/package-macos.sh)
+/MotionFrame.app/
+/*.dmg
