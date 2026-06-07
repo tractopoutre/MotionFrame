@@ -48,6 +48,7 @@ features = [
     "Document",
     "DragEvent",
     "Element",
+    "ErrorEvent",
     "Event",
     "EventTarget",
     "File",

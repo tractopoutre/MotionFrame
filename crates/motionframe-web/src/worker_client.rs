@@ -78,6 +78,7 @@ pub enum WorkerEvent {
 pub struct WorkerClient {
     worker: web_sys::Worker,
     _on_message: Closure<dyn FnMut(web_sys::MessageEvent)>,
+    _on_error: Closure<dyn FnMut(web_sys::ErrorEvent)>,
     inbox: Rc<RefCell<VecDeque<WorkerEvent>>>,
 }
 
@@ -131,9 +132,26 @@ impl WorkerClient {
         }) as Box<dyn FnMut(web_sys::MessageEvent)>);
         worker.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
 
+        // A worker-level error (module load failure, or a wasm trap not caught
+        // by worker.js's try/catch) would otherwise leave the app waiting for a
+        // Done that never arrives. Surface it as a terminal Error event so the
+        // app clears its generating state and shows the message.
+        let inbox_err = Rc::clone(&inbox);
+        let on_error = Closure::wrap(Box::new(move |ev: web_sys::ErrorEvent| {
+            let msg = ev.message();
+            let msg = if msg.is_empty() {
+                "worker crashed".to_string()
+            } else {
+                format!("worker crashed: {msg}")
+            };
+            inbox_err.borrow_mut().push_back(WorkerEvent::Error(msg));
+        }) as Box<dyn FnMut(web_sys::ErrorEvent)>);
+        worker.set_onerror(Some(on_error.as_ref().unchecked_ref()));
+
         Ok(Self {
             worker,
             _on_message: on_message,
+            _on_error: on_error,
             inbox,
         })
     }
@@ -178,6 +196,27 @@ impl WorkerClient {
     }
 }
 
+/// Copy an RGBA typed array into a `Vec`, verifying its length matches
+/// `width * height * 4` first.
+fn validated_rgba(
+    arr: &js_sys::Uint8Array,
+    width: u32,
+    height: u32,
+    label: &str,
+) -> Result<Vec<u8>, String> {
+    let expected = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|n| n.checked_mul(4))
+        .ok_or_else(|| format!("{label} atlas dims {width}x{height} overflow"))?;
+    let actual = arr.length() as usize;
+    if actual != expected {
+        return Err(format!(
+            "{label} atlas buffer len {actual} != expected {expected} for {width}x{height}"
+        ));
+    }
+    Ok(arr.to_vec())
+}
+
 fn get_field(obj: &JsValue, key: &str) -> Result<JsValue, String> {
     js_sys::Reflect::get(obj, &JsValue::from_str(key))
         .map_err(|e| format!("missing field `{key}`: {e:?}"))
@@ -204,15 +243,19 @@ fn parse_done_message(data: &JsValue) -> Result<EncodeResult, String> {
     let flow_data: js_sys::Float32Array = get_field(data, "flow_data")?
         .dyn_into()
         .map_err(|_| "flow_data not Float32Array".to_string())?;
+    // Validate buffer lengths against declared dims: downstream consumers index
+    // these by width*height*4 and would OOB-panic on a short/detached buffer.
+    let color_data = validated_rgba(&color, meta.color_atlas_w, meta.color_atlas_h, "color")?;
+    let motion_data = validated_rgba(&motion, meta.motion_atlas_w, meta.motion_atlas_h, "motion")?;
     let color_atlas = ImageRgba8 {
         width: meta.color_atlas_w,
         height: meta.color_atlas_h,
-        data: color.to_vec(),
+        data: color_data,
     };
     let motion_atlas = ImageRgba8 {
         width: meta.motion_atlas_w,
         height: meta.motion_atlas_h,
-        data: motion.to_vec(),
+        data: motion_data,
     };
 
     let flows = parse_flows(&flow_dims, &flow_data)?;

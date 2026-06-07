@@ -94,7 +94,15 @@ const ready = (async () => {
   await initThreadPool(navigator.hardwareConcurrency);
 })();
 self.onmessage = async (ev) => {
-  await ready;
-  handle_message(ev.data);
+  try {
+    await ready;
+    handle_message(ev.data);
+  } catch (e) {
+    // Surface init failures (e.g. SharedArrayBuffer unavailable without
+    // cross-origin isolation) and wasm traps to the main thread, so the app
+    // shows an error instead of waiting forever for a Done that never comes.
+    const msg = e && e.message ? e.message : String(e);
+    self.postMessage({ type: 'Error', data: 'worker failure: ' + msg });
+  }
 };
 JS
