@@ -87,4 +87,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag="${GITHUB_REF_NAME:-manual-${GITHUB_RUN_NUMBER}}"
-          gh release create "$tag" artifacts/**/* --draft --title "$tag" --notes "MotionFrame Rust release."
+          gh release create "$tag" artifacts/**/* --repo "$GITHUB_REPOSITORY" \
+            --draft --title "$tag" --notes "MotionFrame Rust release."
