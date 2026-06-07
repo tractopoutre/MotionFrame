@@ -25,4 +25,15 @@ fn main() {
     let compressed_font = miniz_oxide::deflate::compress_to_vec(&font, 10);
     std::fs::write(out_dir.join("line_seed_jp.deflate"), &compressed_font)
         .expect("write compressed LINE Seed JP font blob");
+
+    // Content-hashed worker directory name, written by build-web-worker.sh (the
+    // Trunk pre_build hook) before this build runs. Injected so worker_client
+    // loads the hashed dir, which makes the worker cache-bust on every change.
+    // Falls back to "worker" for builds that don't run the hook (e.g. cargo
+    // check / clippy), keeping env!("WORKER_DIR") resolvable at compile time.
+    let worker_dir_file = manifest.join(".worker-dir");
+    println!("cargo:rerun-if-changed={}", worker_dir_file.display());
+    let worker_dir = std::fs::read_to_string(&worker_dir_file)
+        .map_or_else(|_| "worker".to_string(), |s| s.trim().to_string());
+    println!("cargo:rustc-env=WORKER_DIR={worker_dir}");
 }

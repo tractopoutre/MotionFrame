@@ -52,18 +52,28 @@ RUSTFLAGS="-C target-feature=+simd128,+bulk-memory,+mutable-globals,+atomics \
     { print }
   ' >&2)
 
-mkdir -p crates/motionframe-web/static/worker
+# Content-address the worker output by a hash of the built wasm. A worker code
+# change yields a new directory URL, so browsers can cache it immutably yet
+# never serve a stale worker against a freshly-fetched main app (which loads
+# the dir name injected at build time via build.rs). All worker imports are
+# relative, so moving the whole tree under a hashed dir needs no path patching.
+WORKER_HASH="$(shasum -a 256 crates/motionframe-web-worker/pkg/motionframe_web_worker_bg.wasm | cut -c1-16)"
+WORKER_DIR="worker-$WORKER_HASH"
+DEST="crates/motionframe-web/static/$WORKER_DIR"
+
+# Drop any previous worker output (the old fixed-name dir and stale hashed dirs)
+# so dist only ever contains the current one.
+rm -rf crates/motionframe-web/static/worker crates/motionframe-web/static/worker-*
+mkdir -p "$DEST"
 cp crates/motionframe-web-worker/pkg/motionframe_web_worker.js \
    crates/motionframe-web-worker/pkg/motionframe_web_worker_bg.wasm \
-   crates/motionframe-web/static/worker/
+   "$DEST/"
 
 # wasm-bindgen-rayon emits a workerHelpers.js (and any other JS snippets)
 # under pkg/snippets/. Child workers spawned by initThreadPool fetch it
-# relative to the main worker URL, so it must ship at static/worker/snippets/.
-rm -rf crates/motionframe-web/static/worker/snippets
+# relative to the main worker URL, so it must ship alongside the worker.
 if [ -d crates/motionframe-web-worker/pkg/snippets ]; then
-  cp -R crates/motionframe-web-worker/pkg/snippets \
-        crates/motionframe-web/static/worker/snippets
+  cp -R crates/motionframe-web-worker/pkg/snippets "$DEST/snippets"
 
   # wasm-bindgen-rayon's workerHelpers.js does `import('../../..')` to load
   # the pkg entry — that relies on a bundler to resolve the directory via
@@ -76,7 +86,7 @@ if [ -d crates/motionframe-web-worker/pkg/snippets ]; then
     [ "$before" -gt 0 ] || continue
     perl -i -pe "s|'\.\./\.\./\.\.'|'../../../motionframe_web_worker.js'|g" "$f"
     patched=$((patched + before))
-  done < <(find crates/motionframe-web/static/worker/snippets -name workerHelpers.js)
+  done < <(find "$DEST/snippets" -name workerHelpers.js)
   if [ "$patched" -eq 0 ]; then
     echo "build-web-worker.sh: WARNING — no '../../..' import found in workerHelpers.js." >&2
     echo "  wasm-bindgen-rayon may have changed its emitted glue; verify thread-pool init." >&2
@@ -87,7 +97,7 @@ fi
 # Hand-written glue: `worker.js` that initializes the rayon thread pool, then
 # wires onmessage into wasm. Pool init is async — main-thread postMessage is
 # deferred behind `await ready`.
-cat > crates/motionframe-web/static/worker/worker.js <<'JS'
+cat > "$DEST/worker.js" <<'JS'
 import init, { initThreadPool, handle_message } from './motionframe_web_worker.js';
 const ready = (async () => {
   await init();
@@ -106,3 +116,8 @@ self.onmessage = async (ev) => {
   }
 };
 JS
+
+# Record the hashed worker dir for the main app build (build.rs reads this and
+# injects it via the WORKER_DIR env so worker_client loads ./static/<dir>/...).
+printf '%s' "$WORKER_DIR" > crates/motionframe-web/.worker-dir
+echo "build-web-worker.sh: worker output at static/$WORKER_DIR"

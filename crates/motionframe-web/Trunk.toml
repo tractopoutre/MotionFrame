@@ -14,8 +14,8 @@ headers = { "Cross-Origin-Opener-Policy" = "same-origin", "Cross-Origin-Embedder
 # (motionframe-ui, motionframe-engine, motionframe-web-worker) won't trigger
 # a rebuild. List each src/ explicitly so the dev loop covers the full
 # workspace. Setting `watch` REPLACES the default, so include this crate's
-# src/Cargo.toml too. The pre_build hook regenerates `static/worker/` on
-# every build (worker wasm + JS glue) — without ignoring it, those writes
+# src/Cargo.toml too. The pre_build hook regenerates `static/worker-<hash>/`
+# on every build (worker wasm + JS glue) — without ignoring it, those writes
 # look like source changes and trigger an infinite reload loop.
 [watch]
 watch = [
@@ -29,7 +29,7 @@ watch = [
     "../motionframe-web-worker/src",
     "../motionframe-web-worker/Cargo.toml",
 ]
-ignore = ["static/worker"]
+ignore = ["static"]
 
 [[hooks]]
 stage = "pre_build"

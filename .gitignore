@@ -1,7 +1,8 @@
 /target/
 /crates/motionframe-web-worker/pkg/
 /crates/motionframe-web/dist/
-/crates/motionframe-web/static/worker/
+/crates/motionframe-web/static/
+/crates/motionframe-web/.worker-dir
 .DS_Store
 **/.DS_Store
 

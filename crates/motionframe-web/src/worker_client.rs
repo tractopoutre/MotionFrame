@@ -86,7 +86,13 @@ impl WorkerClient {
     pub fn spawn() -> Result<Self, JsValue> {
         let opts = web_sys::WorkerOptions::new();
         opts.set_type(web_sys::WorkerType::Module);
-        let worker = web_sys::Worker::new_with_options("./static/worker/worker.js", &opts)?;
+        // WORKER_DIR is the content-hashed worker directory injected by build.rs
+        // (e.g. "worker-1a2b3c4d"), so a worker change is a new URL the browser
+        // hasn't cached — no stale-worker / new-app skew.
+        let worker = web_sys::Worker::new_with_options(
+            concat!("./static/", env!("WORKER_DIR"), "/worker.js"),
+            &opts,
+        )?;
 
         let inbox: Rc<RefCell<VecDeque<WorkerEvent>>> = Rc::new(RefCell::new(VecDeque::new()));
         let inbox_clone = Rc::clone(&inbox);
