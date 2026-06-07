@@ -557,7 +557,7 @@ fn build_motion_atlas(
     let final_atlas = if motion_vector_width == atlas_w {
         flow_atlas
     } else {
-        resize_flow_atlas(&flow_atlas, motion_vector_width, interp)
+        resize_flow_atlas(&flow_atlas, motion_vector_width, atlas_rows, interp)
     };
 
     match encoding {
@@ -908,9 +908,23 @@ fn blit_flow(atlas: &mut Flow, tile: &Flow, ox: u32, oy: u32, extrude: u32) {
 }
 
 /// Resize the entire flow atlas (for `halve_motion_vector`).
-fn resize_flow_atlas(atlas: &Flow, new_width: u32, interp: crate::pipeline::Interpolation) -> Flow {
-    let new_height =
-        (f64::from(atlas.height) * (f64::from(new_width) / f64::from(atlas.width))).ceil() as u32;
+/// Resize the motion atlas to `new_width`, keeping the height an exact multiple
+/// of `atlas_rows`. The atlas is `atlas_rows` tiles tall (`height = atlas_rows *
+/// tile_h`); scaling height by the raw aspect ratio can yield a value not
+/// divisible by `atlas_rows`, which makes `stagger_pack`'s floor-division
+/// silently drop the bottom pixel rows. Snapping per-tile keeps every tile
+/// boundary aligned.
+fn resize_flow_atlas(
+    atlas: &Flow,
+    new_width: u32,
+    atlas_rows: u32,
+    interp: crate::pipeline::Interpolation,
+) -> Flow {
+    let ratio = f64::from(new_width) / f64::from(atlas.width);
+    let rows = atlas_rows.max(1);
+    let tile_h = atlas.height / rows; // exact: height == atlas_rows * tile_h by construction
+    let new_tile_h = (f64::from(tile_h) * ratio).ceil() as u32;
+    let new_height = new_tile_h * rows;
     resize_flow_dispatch(
         &atlas.data,
         atlas.width,
