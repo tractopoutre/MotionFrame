@@ -67,6 +67,8 @@ cargo run --release --bin motionframe
 
 In the desktop app:
 
+![Desktop Screenshot](https://github.com/user-attachments/assets/94de16f4-842c-4660-a415-0ac973031251)
+
 - Load frames: drag and drop an image sequence onto the window, or click Browse. A folder works (the tool infers the frame-number naming), as does a single atlas image (tile count is auto-detected).
 - Configure options. Output frames sets the target output count, and Analyze skipped frames improves quality when the input has more frames than the output.
 - Click Generate. The result appears across the tabs: Color, Motion, Visualization (motion as arrows), and Preview (animated GPU playback warped by the motion vectors).
@@ -116,10 +118,6 @@ Use these refs for the old Python implementation:
 - `python-final`
 - `v1.0.0-python-final`
 
-## Toolchain
-
-Stable Rust 1.95 is pinned in `rust-toolchain.toml`.
-
 ## Verification
 
 ```bash
@@ -141,8 +139,7 @@ are listed in `THIRD-PARTY-LICENSES.md`.
   - In Unity, uncheck "sRGB (Color Texture)" in the texture settings.
 - The exported JSON holds metadata useful for shader parameters, such as motion strength and total frame count.
 
-Downloading this tool and using generated textures for your game does not
-contaminate your software with GPL v3.0.
+Downloading this tool and using generated textures for your game does not contaminate your software with GPL v3.0.
 
 ## Appendix
 
