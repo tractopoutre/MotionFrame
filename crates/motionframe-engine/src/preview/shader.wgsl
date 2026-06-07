@@ -89,8 +89,8 @@ fn bg_color(uv: vec2<f32>) -> vec3<f32> {
     // obvious without overpowering the foreground.
     let cell = floor(uv * 16.0);
     let parity = (i32(cell.x) + i32(cell.y)) & 1;
-    if (parity == 0) { return vec3<f32>(0.65); }
-    return vec3<f32>(0.85);
+    if (parity == 0) { return vec3<f32>(0.8); }
+    return vec3<f32>(1.0);
 }
 
 struct VsOut {
