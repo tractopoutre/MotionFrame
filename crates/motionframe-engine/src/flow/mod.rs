@@ -1,7 +1,7 @@
 //! Farneback optical flow — pure Rust implementation.
 //!
 //! Derived from `OpenCV`'s `optflowgf.cpp` (Farneback dense optical flow).
-//! See `THIRD-PARTY-NOTICES.md` for license details.
+//! See `THIRD-PARTY-LICENSES.md` for license details.
 
 pub mod farneback;
 pub mod poly;

@@ -1,7 +1,7 @@
 //! Per-pixel displacement update for Farneback optical flow.
 //!
 //! Derived from `OpenCV`'s `optflowgf.cpp` (`FarnebackUpdateMatrices`,
-//! `FarnebackUpdateFlow`). See THIRD-PARTY-NOTICES.md for license attribution.
+//! `FarnebackUpdateFlow`). See THIRD-PARTY-LICENSES.md for license attribution.
 
 use crate::flow::poly::PolyImage;
 use crate::pipeline::Flow;

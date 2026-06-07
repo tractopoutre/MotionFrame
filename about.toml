@@ -20,5 +20,10 @@ accepted = [
 ignore-build-dependencies = true
 ignore-dev-dependencies = true
 
+# First-party workspace crates (publish = false) are MotionFrame's own code,
+# not third-party libraries, so exclude them from this report.
+[private]
+ignore = true
+
 # Crates whose embedded license text is missing or non-canonical can be
 # clarified with `[clarify."crate-name"]` blocks here. None needed yet.

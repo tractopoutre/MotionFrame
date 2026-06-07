@@ -127,8 +127,8 @@ Stable Rust 1.95 is pinned in `rust-toolchain.toml`.
 
 [GPL v3.0](https://www.gnu.org/licenses/gpl-3.0.txt)
 
-MotionFrame is licensed under GPL v3.0. Third-party notices are listed in
-`THIRD-PARTY-NOTICES.md`.
+MotionFrame is licensed under GPL v3.0. Third-party notices and license texts
+are listed in `THIRD-PARTY-LICENSES.md`.
 
 ## Notes
 

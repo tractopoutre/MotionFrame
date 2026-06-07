@@ -13,7 +13,7 @@ bash scripts/build-web-worker.sh
 
 (cd crates/motionframe-web && env -u NO_COLOR trunk build --release)
 
-# Stage THIRD-PARTY-NOTICES.md into dist
-cp THIRD-PARTY-NOTICES.md crates/motionframe-web/dist/
+# Third-party license text is embedded in the wasm binary (see build.rs) and
+# shown in-app, so no separate license file is staged into dist.
 
 echo "build-web.sh: dist at crates/motionframe-web/dist/"

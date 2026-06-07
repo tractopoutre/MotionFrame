@@ -5,6 +5,7 @@ edition = "2021"
 rust-version = "1.95"
 description = "MotionFrame web app (eframe on wasm)"
 license = "GPL-3.0-only"
+publish = false
 build = "build.rs"
 
 [lib]

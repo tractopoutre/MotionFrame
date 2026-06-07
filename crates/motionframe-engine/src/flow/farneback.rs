@@ -2,7 +2,7 @@
 //!
 //! Pure-Rust implementation derived from `OpenCV`'s `optflowgf.cpp`
 //! (`calcOpticalFlowFarneback`, CPU non-fastPyramids path).
-//! See THIRD-PARTY-NOTICES.md for license attribution.
+//! See THIRD-PARTY-LICENSES.md for license attribution.
 
 use crate::flow::poly::poly_expansion;
 use crate::flow::pyramid::{build_level_image, compute_num_levels};

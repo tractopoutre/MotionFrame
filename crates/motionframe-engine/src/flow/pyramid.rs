@@ -1,7 +1,7 @@
 //! Gaussian pyramid construction for Farneback optical flow.
 //!
 //! Derived from `OpenCV`'s `optflowgf.cpp` (non-fastPyramids path).
-//! See THIRD-PARTY-NOTICES.md for license attribution.
+//! See THIRD-PARTY-LICENSES.md for license attribution.
 
 use crate::pipeline::ImageF32;
 use rayon::prelude::*;

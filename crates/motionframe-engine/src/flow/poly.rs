@@ -2,7 +2,7 @@
 //!
 //! Pure-Rust implementation derived from `OpenCV`'s `optflowgf.cpp`
 //! (`FarnebackPolyExp`, `FarnebackPrepareGaussian`).
-//! See THIRD-PARTY-NOTICES.md for license attribution.
+//! See THIRD-PARTY-LICENSES.md for license attribution.
 
 use crate::pipeline::ImageF32;
 use rayon::prelude::*;
