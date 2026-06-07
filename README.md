@@ -13,8 +13,8 @@ Try it in your browser: [motionframe.aki-null.net](https://motionframe.aki-null.
 
 | Fade Blend                                                                                         | Motion Blend                                                                                         |
 | -------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| ![Explosion Fade](https://github.com/user-attachments/assets/00159a36-f49e-4593-9221-0b4c80ca4113) | ![Explosion Motion](https://github.com/user-attachments/assets/239eac78-90b2-4018-bd08-68a8148c7642) |
-| ![Smoke Fade](https://github.com/user-attachments/assets/e20742f8-35bc-403d-8da0-a7d2397d7e89)     | ![Smoke Motion](https://github.com/user-attachments/assets/c9e847f7-06a3-452e-b592-bc7e0b674782)     |
+| ![Explosion Fade](https://github.com/user-attachments/assets/8167b8ee-49cb-42b1-a982-732bdcb46d92) | ![Explosion Motion](https://github.com/user-attachments/assets/eb3ef00c-9cc2-4e6b-9573-12414dbf7e33) |
+| ![Smoke Fade](https://github.com/user-attachments/assets/78a54957-fccb-4fea-a9ec-8de2e57de37c) | ![Smoke Motion](https://github.com/user-attachments/assets/6fa39e0e-b345-42f7-8189-2e379e371643) |
 
 ## Key Features
 
@@ -64,8 +64,6 @@ Launch the desktop application:
 ```bash
 cargo run --release --bin motionframe
 ```
-
-![Main Window](https://github.com/user-attachments/assets/d44658e8-3a2d-4908-afb1-a22fbbed1fde)
 
 In the desktop app:
 
@@ -152,8 +150,8 @@ Generated atlases:
 
 | Color Atlas                                                                                       | Motion Atlas                                                                                       |
 | ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| ![Explosion Color Atlas](https://github.com/user-attachments/assets/f68db0fe-9348-4ae3-bffa-cb2839ddc5a8) | ![Explosion Motion Atlas](https://github.com/user-attachments/assets/5354ece8-0127-43a0-8b90-a9d358bab4e5) |
-| ![Smoke Color Atlas](https://github.com/user-attachments/assets/8bcb4457-e245-4f93-a1aa-4ec88763777f)     | ![Smoke Motion Atlas](https://github.com/user-attachments/assets/66e98695-c152-40ad-9aad-8b098f963d09)     |
+| ![Explosion Color Atlas](https://github.com/user-attachments/assets/a17d14d7-e2b4-4eea-b373-b77108511c70) | ![Explosion Motion Atlas](https://github.com/user-attachments/assets/477e0f13-73b9-4a1f-8b38-c3c9a33328ce) |
+| ![Smoke Color Atlas](https://github.com/user-attachments/assets/776135ce-8dc8-4833-8b4e-1ec726a5f358)     | ![Smoke Motion Atlas](https://github.com/user-attachments/assets/45e28ca3-de7f-4d28-bd8a-d2fc3e174bcb)     |
 
 ## References
 
