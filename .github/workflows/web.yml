@@ -1,0 +1,40 @@
+name: web
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.95.0
+          targets: wasm32-unknown-unknown
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-04-15
+          components: rust-src
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Install web build tools
+        run: |
+          cargo install --locked trunk --version 0.21.7
+          cargo install --locked wasm-pack --version 0.14.0
+      - name: Build web bundle
+        run: bash scripts/build-web.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: motionframe-web
+          path: crates/motionframe-web/dist
+          if-no-files-found: error
+

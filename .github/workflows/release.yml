@@ -1,0 +1,76 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-release:
+    name: build-release (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-latest
+            archive: motionframe-linux-x86_64.tar.gz
+            binary: target/release/motionframe
+          - name: macos-aarch64
+            os: macos-14
+            archive: motionframe-macos-aarch64.tar.gz
+            binary: target/release/motionframe
+          - name: macos-x86_64
+            os: macos-13
+            archive: motionframe-macos-x86_64.tar.gz
+            binary: target/release/motionframe
+          - name: windows-x86_64
+            os: windows-latest
+            archive: motionframe-windows-x86_64.zip
+            binary: target/release/motionframe.exe
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.95.0
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build -p motionframe-desktop --release
+      - name: Stage package
+        shell: bash
+        run: |
+          mkdir -p package
+          cp "${{ matrix.binary }}" package/
+          cp README.md LICENSE THIRD-PARTY-NOTICES.md THIRD-PARTY-LICENSES.md package/
+      - name: Create archive
+        shell: bash
+        run: |
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            powershell -NoProfile -Command "Compress-Archive -Path package/* -DestinationPath '${{ matrix.archive }}'"
+          else
+            tar -czf "${{ matrix.archive }}" -C package .
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.archive }}
+          path: ${{ matrix.archive }}
+          if-no-files-found: error
+
+  github-release:
+    runs-on: ubuntu-latest
+    needs: build-release
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF_NAME:-manual-${GITHUB_RUN_NUMBER}}"
+          gh release create "$tag" artifacts/**/* --draft --title "$tag" --notes "MotionFrame Rust release."
