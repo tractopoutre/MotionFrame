@@ -2,15 +2,28 @@
   Cross-Origin-Opener-Policy: same-origin
   Cross-Origin-Embedder-Policy: require-corp
 
-/static/worker/*
-  Cross-Origin-Resource-Policy: same-origin
-
-/*.wasm
+# Only the content-hashed main app bundle is cached immutably. These patterns
+# deliberately do NOT match the worker assets under /static/worker/ (which use
+# fixed names) — Cloudflare _headers MERGES Cache-Control across all matching
+# rules, so a broad /*.wasm rule here would taint the worker with a
+# contradictory "immutable, no-cache".
+/motionframe-web-*.wasm
   Cache-Control: public, max-age=31536000, immutable
   Content-Type: application/wasm
 
-/*.js
+/motionframe-web-*.js
   Cache-Control: public, max-age=31536000, immutable
+
+# Worker assets have fixed (non-content-hashed) names, so they must revalidate:
+# a worker/protocol change (e.g. a new DoneMeta field) would otherwise leave
+# returning visitors on a stale worker that mismatches the freshly-fetched main
+# app — "missing field" deserialize errors.
+/static/worker/*
+  Cross-Origin-Resource-Policy: same-origin
+  Cache-Control: no-cache
+
+/static/worker/*.wasm
+  Content-Type: application/wasm
 
 /index.html
   Cache-Control: no-cache
