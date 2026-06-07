@@ -7,7 +7,7 @@ runtime shader can sample for smoother playback with fewer texture frames.
 
 The project includes a desktop application, a command-line converter, and a web version.
 
-**Try it in your browser: [motionframe.aki-null.net](https://motionframe.aki-null.net)**
+Try it in your browser: [motionframe.aki-null.net](https://motionframe.aki-null.net)
 
 ## Sample Renders
 
@@ -66,6 +66,13 @@ cargo run --release --bin motionframe
 ```
 
 ![Main Window](https://github.com/user-attachments/assets/d44658e8-3a2d-4908-afb1-a22fbbed1fde)
+
+In the desktop app:
+
+- Load frames: drag and drop an image sequence onto the window, or click Browse. A folder works (the tool infers the frame-number naming), as does a single atlas image (tile count is auto-detected).
+- Configure options. Output frames sets the target output count, and Analyze skipped frames improves quality when the input has more frames than the output.
+- Click Generate. The result appears across the tabs: Color, Motion, Visualization (motion as arrows), and Preview (animated GPU playback warped by the motion vectors).
+- Click Save to export a color atlas and a motion vector atlas (TGA), plus JSON metadata.
 
 Convert one image sequence or atlas from the command line:
 
@@ -131,6 +138,10 @@ MotionFrame is licensed under GPL v3.0. Third-party notices and license texts
 are listed in `THIRD-PARTY-LICENSES.md`.
 
 ## Notes
+
+- Import the motion vector texture as linear (non-sRGB) in your game engine.
+  - In Unity, uncheck "sRGB (Color Texture)" in the texture settings.
+- The exported JSON holds metadata useful for shader parameters, such as motion strength and total frame count.
 
 Downloading this tool and using generated textures for your game does not
 contaminate your software with GPL v3.0.
