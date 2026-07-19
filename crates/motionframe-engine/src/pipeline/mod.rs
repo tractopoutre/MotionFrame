@@ -4,10 +4,12 @@ pub mod atlas_layout;
 pub mod bidirectional;
 pub mod encode;
 pub mod output_detents;
+pub mod output_naming;
 pub mod pack;
 pub mod run;
 pub mod temporal;
 
+pub use output_naming::{interpolate_name_format, NameTokens, OutputFileType};
 pub use run::PackMode;
 
 use std::path::PathBuf;
