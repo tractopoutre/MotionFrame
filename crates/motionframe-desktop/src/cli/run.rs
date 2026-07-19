@@ -27,12 +27,16 @@ pub fn run_convert(mut job: ConvertJob) -> Result<(), CliError> {
         .map_err(|e| CliError::Pipeline(format!("frame source: {e}")))?;
     let progress_fn = |_p: Progress| {};
     let cancel_fn = || false;
-    let mut result: EncodeResult;
+    let result: EncodeResult;
 
     #[cfg(feature = "preview")]
     {
-        let gpu: Option<&motionframe_engine::gpu::GpuPipeline> = None; // TODO: receive from preview device
-        result = run::run_pipeline_with_gpu(&source, &job.options, &progress_fn, &cancel_fn, gpu)?;
+        let gpu = motionframe_engine::gpu::GpuPipeline::try_init();
+        if let Some(gpu) = gpu.as_ref() {
+            result = run::run_pipeline_with_gpu(&source, &job.options, &progress_fn, &cancel_fn, Some(gpu))?;
+        } else {
+            result = run::run_pipeline(&source, &job.options, &progress_fn, &cancel_fn)?;
+        }
     }
 
     #[cfg(not(feature = "preview"))]

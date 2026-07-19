@@ -27,6 +27,24 @@ pub struct GpuPipeline {
 }
 
 impl GpuPipeline {
+    /// Attempt to initialize a GPU pipeline with a new wgpu device.
+    /// Returns `None` if no suitable GPU adapter is available.
+    pub fn try_init() -> Option<Self> {
+        let instance = Instance::new(InstanceDescriptor::new_without_display_handle());
+        let adapter = pollster::block_on(instance.request_adapter(
+            &RequestAdapterOptions {
+                power_preference: PowerPreference::HighPerformance,
+                ..RequestAdapterOptions::default()
+            },
+        ))
+        .ok()?;
+        let (device, queue) = pollster::block_on(adapter.request_device(
+            &DeviceDescriptor::default(),
+        ))
+        .ok()?;
+        Some(Self::new(Arc::new(device), queue))
+    }
+
     /// Create a new GPU pipeline from an existing wgpu device + queue.
     pub fn new(device: Arc<Device>, queue: Queue) -> Self {
         // --- Bind group layouts ---
