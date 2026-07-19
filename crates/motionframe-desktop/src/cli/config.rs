@@ -64,6 +64,7 @@ pub struct CliConfig {
     pub overwrite: Option<bool>,
     pub output_count: Option<u32>,
     pub tile_width: Option<u32>,
+    pub atlas_resolution: Option<u32>,
     pub max_atlas_dim: Option<u32>,
     pub layout: Option<LayoutMode>,
     pub atlas_cols: Option<u32>,
@@ -112,6 +113,7 @@ impl CliConfig {
         }
         self.output_count = args.output_count.or(self.output_count);
         self.tile_width = args.tile_width.or(self.tile_width);
+        self.atlas_resolution = args.atlas_resolution.or(self.atlas_resolution);
         self.max_atlas_dim = args.max_atlas_dim.or(self.max_atlas_dim);
         self.layout = args.layout.or(self.layout);
         self.atlas_cols = args.atlas_cols.or(self.atlas_cols);
@@ -161,6 +163,7 @@ mod tests {
             progress: None,
             output_count: None,
             tile_width: None,
+            atlas_resolution: None,
             layout: None,
             atlas_cols: None,
             atlas_rows: None,

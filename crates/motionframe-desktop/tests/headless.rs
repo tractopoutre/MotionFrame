@@ -110,9 +110,9 @@ fn convert_config_with_cli_override_changes_metadata() {
     let dir = std::env::temp_dir();
     let config_path = dir.join("motionframe_convert_config.toml");
     let out_prefix = dir.join("motionframe_convert_config_out");
-    let color = out_prefix.with_file_name("motionframe_convert_config_out_2x1.tga");
-    let motion = out_prefix.with_file_name("motionframe_convert_config_out_2x1_MV.tga");
-    let meta = out_prefix.with_file_name("motionframe_convert_config_out_2x1_meta.json");
+    let color = out_prefix.with_file_name("motionframe_convert_config_out_1x2.tga");
+    let motion = out_prefix.with_file_name("motionframe_convert_config_out_1x2_MV.tga");
+    let meta = out_prefix.with_file_name("motionframe_convert_config_out_1x2_meta.json");
     let _ = std::fs::remove_file(&color);
     let _ = std::fs::remove_file(&motion);
     let _ = std::fs::remove_file(&meta);

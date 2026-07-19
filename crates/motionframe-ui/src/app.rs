@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use motionframe_engine::io::sequence;
-use motionframe_engine::pipeline::atlas_layout::{pick_layout, DEFAULT_PADDING_BOUND};
+use motionframe_engine::pipeline::atlas_layout::DEFAULT_PADDING_BOUND;
 use motionframe_engine::pipeline::output_detents::{
     build_output_count_detents, snap_to_canonical_skip, DetentEntry,
 };
@@ -154,6 +154,20 @@ impl<P: Platform> MotionFrameApp<P> {
         }
     }
 
+    /// Frame count after applying the start/end range slice.
+    fn frame_count_after_range(&self) -> u32 {
+        let total = self.effective_frame_count() as u32;
+        if total == 0 {
+            return 0;
+        }
+        let end = if self.options.end_frame == 0 {
+            total
+        } else {
+            self.options.end_frame
+        };
+        end.saturating_sub(self.options.start_frame).min(total)
+    }
+
     fn clear_texture_cache(&mut self) {
         self.color_tex = None;
         self.motion_tex = None;
@@ -236,6 +250,8 @@ impl<P: Platform> MotionFrameApp<P> {
         }
 
         self.default_save_name = derive_save_prefix(&frames[0].name);
+        self.options.start_frame = 0;
+        self.options.end_frame = frames.len() as u32;
         self.frames = frames;
         self.frame_dims = Some((w, h));
         self.result = None;
@@ -358,15 +374,17 @@ impl<P: Platform> MotionFrameApp<P> {
         if iw == 0 || ih == 0 {
             return;
         }
-        let tile_w = self.options.tile_pixel_width.max(1);
-        let extrude = self.options.extrude.min((tile_w - 1) / 2);
-        let valid_w = tile_w - extrude * 2;
-        let valid_h = predict_resize_height(ih, iw, valid_w);
-        let tile_h = valid_h + extrude * 2;
+        let input_aspect = iw as f64 / ih as f64;
         let max_dim = self.options.output_atlas_max_dim;
-        if let Some(layout) = pick_layout(n_output, tile_w, tile_h, max_dim, DEFAULT_PADDING_BOUND)
-        {
+        if let Some(layout) = motionframe_engine::pipeline::atlas_layout::pick_layout(
+            n_output,
+            input_aspect,
+            self.options.atlas_resolution,
+            max_dim,
+            DEFAULT_PADDING_BOUND,
+        ) {
             self.options.atlas_dims = (layout.cols, layout.rows);
+            self.options.tile_pixel_width = layout.tile_width;
         }
     }
 
@@ -677,20 +695,25 @@ impl<P: Platform> MotionFrameApp<P> {
                 self.recompute_atlas_layout();
                 let output_dims = self.output_dims();
                 let n_input = self.effective_frame_count() as u32;
+                let n_after_range = self.frame_count_after_range();
                 let canonical_layouts = build_output_count_detents(
                     n_input,
                     self.options.trim_tail_for_exact_output_count,
                 );
                 self.sync_output_detent(&canonical_layouts, n_input);
                 let trim_tail_before = self.options.trim_tail_for_exact_output_count;
+                let sequence_loaded = !self.frames.is_empty()
+                    && self.options.input_atlas_dims.is_none();
                 input_panel::show_options(
                     &mut body_ui,
                     &mut self.options,
                     &mut self.atlas_layout_manual,
                     output_dims,
                     n_input,
+                    n_after_range,
                     &canonical_layouts,
                     self.lang,
+                    sequence_loaded,
                 );
                 if trim_tail_before != self.options.trim_tail_for_exact_output_count {
                     self.atlas_layout_manual = false;

@@ -86,7 +86,12 @@ pub struct GenerateOptions {
     pub frame_skip: u32,
     /// Allows exact output frame counts by ignoring ending input frames.
     pub trim_tail_for_exact_output_count: bool,
+    /// Target total atlas resolution in pixels. Tile dimensions are auto-computed
+    /// from this value and the input aspect ratio. When set, `tile_pixel_width`
+    /// is derived from the auto-layout algorithm.
+    pub atlas_resolution: u32,
     /// Per-tile output width in pixels. Total atlas width = `tile_pixel_width * atlas_dims.0`.
+    /// In auto-layout mode this is computed from `atlas_resolution` and aspect ratio.
     pub tile_pixel_width: u32,
     pub atlas_dims: (u32, u32),
     pub stagger_pack: bool,
@@ -225,6 +230,7 @@ impl Default for GenerateOptions {
             output_frames: 64,
             frame_skip: 0,
             trim_tail_for_exact_output_count: false,
+            atlas_resolution: 2048,
             tile_pixel_width: 128,
             atlas_dims: (8, 8),
             stagger_pack: false,
@@ -272,6 +278,7 @@ mod tests {
         assert_eq!(opts.output_type_meta, "_meta");
         assert_eq!(opts.start_frame, 0);
         assert_eq!(opts.end_frame, 0);
+        assert_eq!(opts.atlas_resolution, 2048);
     }
 }
 

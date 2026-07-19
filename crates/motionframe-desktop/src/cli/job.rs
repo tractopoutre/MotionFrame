@@ -1,8 +1,7 @@
 use std::path::PathBuf;
 
-use motionframe_engine::pipeline::atlas_layout::{pick_layout, DEFAULT_PADDING_BOUND};
+use motionframe_engine::pipeline::atlas_layout::{compute_tile_dims, pick_layout, AtlasLayout, DEFAULT_PADDING_BOUND};
 use motionframe_engine::pipeline::output_detents::{build_output_count_detents, DetentEntry};
-use motionframe_engine::pipeline::run::predict_resize_height;
 use motionframe_engine::pipeline::output_naming::OutputFileType;
 use motionframe_engine::pipeline::{GenerateOptions, Interpolation, MotionVectorEncoding};
 
@@ -90,6 +89,7 @@ impl ConvertJob {
         }
 
         let mut options = GenerateOptions::default();
+        options.atlas_resolution = cfg.atlas_resolution.unwrap_or(options.atlas_resolution);
         options.tile_pixel_width = cfg.tile_width.unwrap_or(options.tile_pixel_width);
         options.output_atlas_max_dim = max_dim;
         options.is_loop = cfg.is_loop.unwrap_or(options.is_loop);
@@ -147,6 +147,9 @@ impl ConvertJob {
     }
 
     /// Resolve output count and atlas layout after source dimensions are known.
+    ///
+    /// `effective_frame_count` is the count after the start/end slice has been
+    /// applied by `load_frames()`.
     pub fn resolve_after_load(
         &mut self,
         source_width: u32,
@@ -160,27 +163,26 @@ impl ConvertJob {
         }
 
         let output_count = self.resolve_output_count(effective_frame_count)?;
-        let output_tile_height =
-            predict_resize_height(source_height, source_width, self.options.tile_pixel_width);
+        let input_aspect_ratio = source_width as f64 / source_height as f64;
+        let atlas_res = self.options.atlas_resolution;
 
         match self.layout {
             OutputLayout::Auto => {
-                let layout = pick_layout(
+                // In auto mode, use the new aspect-ratio-aware pick_layout.
+                let layout: AtlasLayout = pick_layout(
                     output_count,
-                    self.options.tile_pixel_width,
-                    output_tile_height,
+                    input_aspect_ratio,
+                    atlas_res,
                     self.options.output_atlas_max_dim,
                     DEFAULT_PADDING_BOUND,
                 )
                 .ok_or_else(|| {
                     CliError::Argument(format!(
-                        "auto layout cannot fit {output_count} output frames at {}x{} tiles under max-atlas-dim {}",
-                        self.options.tile_pixel_width,
-                        output_tile_height,
-                        self.options.output_atlas_max_dim
+                        "auto layout cannot fit {output_count} output frames under atlas_resolution {atlas_res}",
                     ))
                 })?;
                 self.options.atlas_dims = (layout.cols, layout.rows);
+                self.options.tile_pixel_width = layout.tile_width;
             }
             OutputLayout::Manual { cols, rows } => {
                 let slots = cols.saturating_mul(rows);
@@ -189,9 +191,10 @@ impl ConvertJob {
                         "manual layout has {slots} slots, but output-count requires {output_count} frames"
                     )));
                 }
-                if cols.saturating_mul(self.options.tile_pixel_width)
-                    > self.options.output_atlas_max_dim
-                    || rows.saturating_mul(output_tile_height) > self.options.output_atlas_max_dim
+                // For manual layout, compute tile dims from atlas_resolution.
+                let (tile_w, tile_h) = compute_tile_dims(atlas_res, cols, rows, input_aspect_ratio);
+                if cols.saturating_mul(tile_w) > self.options.output_atlas_max_dim
+                    || rows.saturating_mul(tile_h) > self.options.output_atlas_max_dim
                 {
                     return Err(CliError::Argument(format!(
                         "manual layout {}x{} exceeds max-atlas-dim {}",
@@ -199,6 +202,7 @@ impl ConvertJob {
                     )));
                 }
                 self.options.atlas_dims = (cols, rows);
+                self.options.tile_pixel_width = tile_w;
             }
         }
 

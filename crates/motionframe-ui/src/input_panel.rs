@@ -73,8 +73,9 @@ impl OutputSummary {
 /// `atlas_layout_manual` is set to `true` when the user direct-edits the
 /// cols/rows `DragValues`. The output-count slider clears it back to `false`.
 ///
-/// `n_input` is the effective input frame count (post atlas-input slicing).
-/// `canonical_layouts` is the sorted-by-count detent set for that `n_input`.
+/// `n_input` is the total input frame count (post atlas-input slicing).
+/// `n_after_range` is the frame count after applying start/end range.
+/// `canonical_layouts` is the sorted-by-count detent set for `n_input`.
 #[allow(clippy::too_many_arguments)]
 pub fn show_options(
     ui: &mut egui::Ui,
@@ -82,23 +83,30 @@ pub fn show_options(
     atlas_layout_manual: &mut bool,
     output_dims: Option<OutputDims>,
     n_input: u32,
+    n_after_range: u32,
     canonical_layouts: &[DetentEntry],
     lang: Lang,
+    sequence_loaded: bool,
 ) {
     egui::ScrollArea::vertical().show(ui, |ui| {
         show_input_group(ui, options, lang);
         if options.input_atlas_dims.is_some() {
             ui.separator();
         }
+        // Frame range appears FIRST (before atlas/output summary)
+        show_frame_range_group(ui, options, n_input, lang);
+        ui.separator();
         show_atlas_group(
             ui,
             options,
             atlas_layout_manual,
             output_dims,
-            n_input,
+            n_after_range,
             canonical_layouts,
             lang,
         );
+        ui.separator();
+        show_output_group(ui, options, sequence_loaded, lang);
         ui.separator();
         show_motion_group(ui, options, lang);
         ui.separator();
@@ -129,32 +137,41 @@ fn show_input_group(ui: &mut egui::Ui, options: &mut GenerateOptions, lang: Lang
     options.input_atlas_dims = Some((cols, rows));
 }
 
-/// Atlas group — output grid, tile size, frame-skip slider, and shared
+/// Atlas group — output grid, tile size, atlas resolution, and shared
 /// resampling options. Always visible.
+#[allow(unused_variables)]
 fn show_atlas_group(
     ui: &mut egui::Ui,
     options: &mut GenerateOptions,
     atlas_layout_manual: &mut bool,
     output_dims: Option<OutputDims>,
-    n_input: u32,
+    n_after_range: u32,
     canonical_layouts: &[DetentEntry],
     lang: Lang,
 ) {
     ui.heading(t(lang, Key::AtlasHeading));
 
-    show_frame_skip_slider(
+    show_output_frames_drag_value(
         ui,
         options,
         atlas_layout_manual,
-        n_input,
-        canonical_layouts,
+        n_after_range,
         lang,
     );
-    let trim_resp = ui.checkbox(
-        &mut options.trim_tail_for_exact_output_count,
-        t(lang, Key::TrimTailForExactOutputCount),
-    );
-    trim_resp.on_hover_text(t(lang, Key::TrimTailForExactOutputCountHover));
+
+    // --- Atlas resolution ---
+    ui.horizontal(|ui| {
+        ui.label(t(lang, Key::AtlasResolution));
+        let mut res = options.atlas_resolution;
+        let resp = ui.add(egui::DragValue::new(&mut res).range(256..=8192).speed(1));
+        if resp.changed() {
+            // Snap to power of 2
+            let snapped = 256u32.max(2u32.pow(res.ilog2()).min(8192));
+            options.atlas_resolution = snapped;
+            *atlas_layout_manual = false;
+        }
+        resp.on_hover_text(t(lang, Key::AtlasResolutionHover));
+    });
 
     // --- Tiles per row / column (auto-filled, editable, lock badge) ---
     let auto_label = t(lang, Key::LockBadgeAuto);
@@ -245,119 +262,47 @@ fn show_atlas_group(
     show_predicted_dims(ui, output_dims, options.output_atlas_max_dim, lang);
 }
 
-/// Output-count slider. Slider value is a detent index into
-/// `canonical_layouts`; the readout shows the corresponding output count
-/// and `frame_skip`.
-fn show_frame_skip_slider(
+/// Output-frames integer DragValue, replacing the old detent-based slider.
+fn show_output_frames_drag_value(
     ui: &mut egui::Ui,
     options: &mut GenerateOptions,
     atlas_layout_manual: &mut bool,
-    n_input: u32,
-    canonical_layouts: &[DetentEntry],
+    n_after_range: u32,
     lang: Lang,
 ) {
-    if canonical_layouts.len() < 2 {
-        if n_input > 0 {
-            let count = motionframe_engine::pipeline::run::calculate_required_frames(
-                n_input as usize,
-                options.frame_skip,
-            );
-            show_output_summary(
-                ui,
-                OutputSummary::new(count, options.frame_skip, 0, options.atlas_dims),
-                lang,
-            );
-        }
-        // N < 3: at most one canonical count; no meaningful choice.
-        // Render a disabled placeholder so the layout doesn't shift on
-        // source load.
-        let mut dummy = 0u32;
-        ui.horizontal(|ui| {
-            ui.label(t(lang, Key::OutputFrames));
-            ui.add_enabled(
-                false,
-                egui::Slider::new(&mut dummy, 0..=0)
-                    .integer()
-                    .show_value(false),
-            );
-        });
-        ui.label(t(lang, Key::LoadMoreFramesHint));
-        return;
-    }
-
-    // Slider value = detent index. Each canonical position gets an equal
-    // slice of the slider track, regardless of where it lands in count-space.
-    let current_count = if options.trim_tail_for_exact_output_count {
-        options.output_frames
+    let max_output = if n_after_range > 0 {
+        let max_slots = options.atlas_dims.0.saturating_mul(options.atlas_dims.1);
+        max_slots.min(n_after_range)
     } else {
-        motionframe_engine::pipeline::run::calculate_required_frames(
-            n_input as usize,
-            options.frame_skip,
-        ) as u32
+        0
     };
-    let mut idx = canonical_layouts
-        .iter()
-        .position(|e| e.output_count == current_count)
-        .unwrap_or(0) as u32;
-    let max_idx = (canonical_layouts.len() - 1) as u32;
 
-    let available_width = ui.available_width();
-    let spacing_y = ui.spacing().item_spacing.y;
-    let heading_height = ui.text_style_height(&egui::TextStyle::Heading);
-    let body_height = ui.text_style_height(&egui::TextStyle::Body);
-    let summary_height = 4.0 + heading_height + spacing_y + body_height;
-    let slider_height = ui.spacing().interact_size.y;
-    let (_, rect) = ui.allocate_space(egui::vec2(
-        available_width,
-        summary_height + spacing_y + slider_height,
-    ));
-    let summary_rect =
-        egui::Rect::from_min_size(rect.min, egui::vec2(available_width, summary_height));
-    let slider_rect = egui::Rect::from_min_size(
-        egui::pos2(rect.min.x, summary_rect.max.y + spacing_y),
-        egui::vec2(available_width, slider_height),
-    );
+    ui.horizontal(|ui| {
+        ui.label(t(lang, Key::OutputFrames));
+        let mut val = options.output_frames;
+        let max_clamped = max_output.max(1);
+        let resp = ui.add(egui::DragValue::new(&mut val).range(1..=max_clamped));
+        if resp.changed() {
+            options.output_frames = val.clamp(1, max_clamped);
+            options.frame_skip = 0; // No auto skip in DragValue mode
+            *atlas_layout_manual = false;
+        }
+        resp.on_hover_text(t(lang, Key::OutputFramesHover));
+    });
 
-    let mut slider_ui = ui.new_child(
-        egui::UiBuilder::new()
-            .max_rect(slider_rect)
-            .layout(egui::Layout::left_to_right(egui::Align::Center)),
-    );
-    let resp = slider_ui
-        .horizontal(|ui| {
-            ui.label(t(lang, Key::OutputFrames));
-            // Stretch the slider to consume the remaining row width.
-            ui.spacing_mut().slider_width = (ui.available_width() - 8.0).max(120.0);
-            ui.add(
-                egui::Slider::new(&mut idx, 0..=max_idx)
-                    .integer()
-                    .show_value(false),
-            )
-        })
-        .inner;
-
-    if resp.changed() {
-        let entry = &canonical_layouts[idx as usize];
-        options.output_frames = entry.output_count;
-        options.frame_skip = entry.frame_skip;
-        *atlas_layout_manual = false;
+    // Show summary: output count and effective frame info
+    if n_after_range > 0 {
+        show_output_summary(
+            ui,
+            OutputSummary::new(
+                options.output_frames as usize,
+                0,
+                0,
+                options.atlas_dims,
+            ),
+            lang,
+        );
     }
-
-    let mut summary_ui = ui.new_child(
-        egui::UiBuilder::new()
-            .max_rect(summary_rect)
-            .layout(egui::Layout::top_down(egui::Align::LEFT)),
-    );
-    show_output_summary(
-        &mut summary_ui,
-        output_summary_for_detent(
-            canonical_layouts,
-            idx as usize,
-            options.atlas_dims,
-            !resp.changed(),
-        ),
-        lang,
-    );
 }
 
 fn output_summary_for_detent(
@@ -543,6 +488,132 @@ pub fn show_language_picker(ui: &mut egui::Ui, lang: &mut Lang, jp_font_availabl
     });
 }
 
+/// Output naming section — format template, basename override, type labels,
+/// and live filename preview.
+fn show_output_group(ui: &mut egui::Ui, options: &mut GenerateOptions, sequence_loaded: bool, lang: Lang) {
+    ui.heading(t(lang, Key::OutputHeading));
+
+    ui.horizontal(|ui| {
+        ui.label(t(lang, Key::OutputFormat));
+        ui.add(
+            egui::TextEdit::singleline(&mut options.output_name_format)
+                .desired_width(f32::INFINITY)
+                .hint_text("[basename]_[cols]x[rows][type].[ext]"),
+        )
+        .on_hover_text(t(lang, Key::OutputFormatHover));
+    });
+
+    ui.horizontal(|ui| {
+        ui.label(t(lang, Key::OutputBaseName));
+        ui.add(
+            egui::TextEdit::singleline(&mut options.output_name_basename)
+                .desired_width(120.0)
+                .hint_text(t(lang, Key::OutputBaseNameHover)),
+        )
+        .on_hover_text(t(lang, Key::OutputBaseNameHover));
+    });
+
+    ui.horizontal(|ui| {
+        ui.label(t(lang, Key::OutputTypeColor));
+        ui.add(egui::TextEdit::singleline(&mut options.output_type_color).desired_width(80.0))
+            .on_hover_text(t(lang, Key::OutputTypeColorHover));
+    });
+
+    ui.horizontal(|ui| {
+        ui.label(t(lang, Key::OutputTypeMotion));
+        ui.add(egui::TextEdit::singleline(&mut options.output_type_motion).desired_width(80.0))
+            .on_hover_text(t(lang, Key::OutputTypeMotionHover));
+    });
+
+    ui.horizontal(|ui| {
+        ui.label(t(lang, Key::OutputTypeMeta));
+        ui.add(egui::TextEdit::singleline(&mut options.output_type_meta).desired_width(80.0))
+            .on_hover_text(t(lang, Key::OutputTypeMetaHover));
+    });
+
+    // Live preview (only when a sequence is loaded)
+    if sequence_loaded {
+        let (cols, rows) = options.atlas_dims;
+        let basename = if options.output_name_basename.is_empty() {
+            "input"
+        } else {
+            &options.output_name_basename
+        };
+        ui.add_space(4.0);
+        ui.label(t(lang, Key::OutputPreview));
+
+        let format = &options.output_name_format;
+        if format.is_empty() {
+            ui.colored_label(egui::Color32::RED, t(lang, Key::OutputPreviewEmpty));
+        } else {
+            let color_name = motionframe_engine::pipeline::output_naming::interpolate_name_format(
+                format,
+                &motionframe_engine::pipeline::output_naming::NameTokens {
+                    basename,
+                    cols,
+                    rows,
+                    type_label: &options.output_type_color,
+                    ext: "tga",
+                },
+            );
+            let motion_name = motionframe_engine::pipeline::output_naming::interpolate_name_format(
+                format,
+                &motionframe_engine::pipeline::output_naming::NameTokens {
+                    basename,
+                    cols,
+                    rows,
+                    type_label: &options.output_type_motion,
+                    ext: "tga",
+                },
+            );
+            let meta_name = motionframe_engine::pipeline::output_naming::interpolate_name_format(
+                format,
+                &motionframe_engine::pipeline::output_naming::NameTokens {
+                    basename,
+                    cols,
+                    rows,
+                    type_label: &options.output_type_meta,
+                    ext: "json",
+                },
+            );
+            ui.label(egui::RichText::new(color_name).size(12.0).weak());
+            ui.label(egui::RichText::new(motion_name).size(12.0).weak());
+            ui.label(egui::RichText::new(meta_name).size(12.0).weak());
+        }
+    }
+}
+
+/// Frame range section — start/end frame drag values. Only visible in
+/// sequence mode (not atlas mode).
+fn show_frame_range_group(ui: &mut egui::Ui, options: &mut GenerateOptions, n_input: u32, lang: Lang) {
+    if options.input_atlas_dims.is_some() {
+        return; // only in sequence mode
+    }
+    ui.heading(t(lang, Key::FrameRangeHeading));
+
+    let mut start = options.start_frame;
+    let mut end = options.end_frame;
+
+    ui.horizontal(|ui| {
+        ui.label(t(lang, Key::StartFrame));
+        ui.add(egui::DragValue::new(&mut start).range(0..=end.saturating_sub(1).max(0)))
+            .on_hover_text(t(lang, Key::StartFrameHover));
+    });
+
+    ui.horizontal(|ui| {
+        ui.label(t(lang, Key::EndFrame));
+        ui.add(egui::DragValue::new(&mut end).range(1..=n_input))
+            .on_hover_text(t(lang, Key::EndFrameHover));
+    });
+
+    if start > end.saturating_sub(1) {
+        ui.colored_label(egui::Color32::RED, "Start must be less than end");
+    }
+
+    options.start_frame = start;
+    options.end_frame = end;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -636,5 +707,41 @@ mod tests {
         let summary = output_summary_for_detent(&layouts, 0, (5, 4), true);
 
         assert_eq!(summary.ignored_tail_frames, None);
+    }
+
+    #[test]
+    fn preview_uses_interpolate_name_format() {
+        let mut opts = GenerateOptions::default();
+        opts.output_name_format = "[basename]_custom.[ext]".into();
+        let (cols, rows) = opts.atlas_dims;
+        let tokens = motionframe_engine::pipeline::output_naming::NameTokens {
+            basename: "test",
+            cols,
+            rows,
+            type_label: "",
+            ext: "tga",
+        };
+        let name = motionframe_engine::pipeline::output_naming::interpolate_name_format(
+            &opts.output_name_format, &tokens,
+        );
+        assert_eq!(name, "test_custom.tga");
+    }
+
+    #[test]
+    fn empty_format_falls_back_to_default_in_preview() {
+        let mut opts = GenerateOptions::default();
+        opts.output_name_format = String::new();
+        let (cols, rows) = opts.atlas_dims;
+        let tokens = motionframe_engine::pipeline::output_naming::NameTokens {
+            basename: "test",
+            cols,
+            rows,
+            type_label: "_MV",
+            ext: "tga",
+        };
+        let name = motionframe_engine::pipeline::output_naming::interpolate_name_format(
+            &opts.output_name_format, &tokens,
+        );
+        assert_eq!(name, "test_8x8_MV.tga");
     }
 }

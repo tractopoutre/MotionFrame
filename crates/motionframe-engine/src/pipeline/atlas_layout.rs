@@ -1,26 +1,6 @@
 //! Atlas grid layout selection: pick (cols, rows) for an output frame count
-//! that fits the GPU texture limit.
-
-/// Returns `(cols, rows)` with `cols >= rows`, `cols * rows == m`, and
-/// `cols - rows` minimized over all factor pairs of `m`.
-///
-/// `m` must be `>= 1`. For `m == 1` returns `(1, 1)`.
-#[must_use]
-pub fn squarest_factor_pair(m: u32) -> (u32, u32) {
-    debug_assert!(m >= 1, "m must be >= 1");
-    let mut best = (m, 1u32);
-    let mut r = 1u32;
-    while r.saturating_mul(r) <= m {
-        if m.is_multiple_of(r) {
-            let c = m / r;
-            if c - r < best.0 - best.1 {
-                best = (c, r);
-            }
-        }
-        r += 1;
-    }
-    best
-}
+//! that best preserves the input aspect ratio while fitting the GPU texture
+//! limit.
 
 /// Result of `pick_layout`: a chosen atlas grid plus the number of padding
 /// tiles added beyond the requested frame count.
@@ -31,182 +11,261 @@ pub struct AtlasLayout {
     /// Number of empty tiles appended past `n` to obtain a fitting grid.
     /// `cols * rows == n + padding`.
     pub padding: u32,
+    /// Computed tile pixel width.
+    pub tile_width: u32,
+    /// Computed tile pixel height.
+    pub tile_height: u32,
 }
+
+/// The minimum per-tile pixel dimension (both width and height).
+pub const MIN_TILE_DIM: u32 = 4;
 
 /// Default cap on the number of padding tiles `pick_layout` will try.
 pub const DEFAULT_PADDING_BOUND: u32 = 8;
 
-/// Find the smallest `k in [0, k_max]` such that the squarest factor pair
-/// of `n + k` fits the texture limit on both axes.
+/// Compute tile dimensions for a given atlas grid and input aspect ratio.
 ///
-/// `tile_w` and `tile_h` are the full per-tile pixel dimensions (including
-/// any extrude border) of the output color atlas. `max_dim` is the GPU
-/// texture-size cap. Returns `None` if no `k <= k_max` produces a fitting
-/// layout, or if any input is `0`.
+/// Returns `(tile_width, tile_height)` clamped so the total atlas fits within
+/// `atlas_resolution` on both axes.
 #[must_use]
+pub fn compute_tile_dims(
+    atlas_resolution: u32,
+    cols: u32,
+    rows: u32,
+    input_aspect_ratio: f64,
+) -> (u32, u32) {
+    let (cols, rows) = (cols.max(1), rows.max(1));
+    // Start with width filling the atlas resolution horizontally.
+    let mut tile_w = (atlas_resolution as f64 / cols as f64).floor() as u32;
+    let mut tile_h = (tile_w as f64 / input_aspect_ratio).round() as u32;
+
+    // If rows * tile_h exceeds atlas_resolution, clamp height and recompute width.
+    if rows.saturating_mul(tile_h) > atlas_resolution {
+        tile_h = (atlas_resolution as f64 / rows as f64).floor() as u32;
+        tile_w = (tile_h as f64 * input_aspect_ratio).round() as u32;
+    }
+
+    // Ensure minimum tile dimension and within atlas_resolution.
+    tile_w = tile_w.clamp(MIN_TILE_DIM, atlas_resolution);
+    tile_h = tile_h.clamp(MIN_TILE_DIM, atlas_resolution);
+
+    (tile_w, tile_h)
+}
+
+/// Pick the best (cols, rows) layout for `frame_count` frames that preserves
+/// input aspect ratio while fitting the GPU texture limit.
+///
+/// Iterates (cols, rows) pairs where `cols * rows >= frame_count` and scores
+/// each by (1) aspect ratio match and (2) wasted tiles. Returns `None` if no
+/// layout fits.
+#[must_use]
+#[allow(clippy::cast_precision_loss)]
 pub fn pick_layout(
-    n: u32,
-    tile_w: u32,
-    tile_h: u32,
+    frame_count: u32,
+    input_aspect_ratio: f64,
+    atlas_resolution: u32,
     max_dim: u32,
-    k_max: u32,
+    padding_bound: u32,
 ) -> Option<AtlasLayout> {
-    if n == 0 || tile_w == 0 || tile_h == 0 || max_dim == 0 {
+    if frame_count == 0 || atlas_resolution == 0 || max_dim == 0 || input_aspect_ratio <= 0.0 {
         return None;
     }
-    for k in 0..=k_max {
-        let m = n + k;
-        let (cols, rows) = squarest_factor_pair(m);
-        let w_ok = cols.checked_mul(tile_w).is_some_and(|w| w <= max_dim);
-        let h_ok = rows.checked_mul(tile_h).is_some_and(|h| h <= max_dim);
-        if w_ok && h_ok {
-            return Some(AtlasLayout {
-                cols,
-                rows,
-                padding: k,
-            });
+
+    let max_dim = max_dim.min(atlas_resolution);
+    if max_dim < MIN_TILE_DIM {
+        return None;
+    }
+
+    let mut best: Option<AtlasLayout> = None;
+    let mut best_aspect_diff = f64::MAX;
+    let mut best_waste = u32::MAX;
+    let mut best_cols = 0u32;
+    let mut best_rows = 0u32;
+
+    // Try up to padding_bound extra tiles beyond frame_count.
+    for k in 0..=padding_bound {
+        let m = frame_count + k;
+        // Generate candidate (cols, rows) pairs where cols*rows >= m.
+        for cols in 1..=max_dim.min(m) {
+            let rows = m.div_ceil(cols);
+            if cols.saturating_mul(rows) > max_dim.saturating_mul(max_dim) {
+                continue;
+            }
+
+            let (tile_w, tile_h) = compute_tile_dims(atlas_resolution, cols, rows, input_aspect_ratio);
+
+            if tile_w < MIN_TILE_DIM || tile_h < MIN_TILE_DIM {
+                continue;
+            }
+
+            // Check total atlas fits within max_dim.
+            if cols.saturating_mul(tile_w) > max_dim || rows.saturating_mul(tile_h) > max_dim {
+                continue;
+            }
+
+            let tile_aspect = tile_w as f64 / tile_h as f64;
+            let aspect_diff = (tile_aspect - input_aspect_ratio).abs();
+            let wasted = cols.saturating_mul(rows) - frame_count;
+
+            let replace = match &best {
+                None => true,
+                Some(_) => {
+                    // Primary sort: aspect ratio match.
+                    // Secondary: wasted tiles.
+                    // Tertiary: squarest grid (minimize cols-rows diff).
+                    if aspect_diff < best_aspect_diff - 1e-9 {
+                        true
+                    } else if (aspect_diff - best_aspect_diff).abs() > 1e-9 {
+                        false
+                    } else if wasted < best_waste {
+                        true
+                    } else if wasted > best_waste {
+                        false
+                    } else {
+                        // Equal aspect and waste: prefer squarest grid.
+                        let diff = cols.abs_diff(rows);
+                        let best_diff = best_cols.abs_diff(best_rows);
+                        diff < best_diff
+                    }
+                }
+            };
+
+            if replace {
+                best_aspect_diff = aspect_diff;
+                best_waste = wasted;
+                best_cols = cols;
+                best_rows = rows;
+                best = Some(AtlasLayout {
+                    cols,
+                    rows,
+                    padding: k,
+                    tile_width: tile_w,
+                    tile_height: tile_h,
+                });
+            }
         }
     }
-    None
+
+    best
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn squarest_factor_pair_unit() {
-        assert_eq!(squarest_factor_pair(1), (1, 1));
+    #[allow(dead_code)]
+    fn wide_aspect() -> f64 {
+        16.0 / 9.0
     }
-
-    #[test]
-    fn squarest_factor_pair_perfect_squares() {
-        assert_eq!(squarest_factor_pair(4), (2, 2));
-        assert_eq!(squarest_factor_pair(16), (4, 4));
-        assert_eq!(squarest_factor_pair(100), (10, 10));
-    }
-
-    #[test]
-    fn squarest_factor_pair_primes_yield_n_by_1() {
-        assert_eq!(squarest_factor_pair(2), (2, 1));
-        assert_eq!(squarest_factor_pair(7), (7, 1));
-        assert_eq!(squarest_factor_pair(31), (31, 1));
-        assert_eq!(squarest_factor_pair(101), (101, 1));
-    }
-
-    #[test]
-    fn squarest_factor_pair_composites_pick_squarest() {
-        // 15 = 5*3, 15*1 → (5,3)
-        assert_eq!(squarest_factor_pair(15), (5, 3));
-        // 12 = 4*3, 6*2, 12*1 → (4,3)
-        assert_eq!(squarest_factor_pair(12), (4, 3));
-        // 6 = 3*2, 6*1 → (3,2)
-        assert_eq!(squarest_factor_pair(6), (3, 2));
-        // 34 = 17*2, 34*1 → (17,2)
-        assert_eq!(squarest_factor_pair(34), (17, 2));
-        // 102 = 17*6, 51*2, 34*3, 102*1 → (17,6)
-        assert_eq!(squarest_factor_pair(102), (17, 6));
-    }
-
-    #[test]
-    fn squarest_factor_pair_postcondition_cols_ge_rows() {
-        for m in 1u32..=200 {
-            let (c, r) = squarest_factor_pair(m);
-            assert!(c >= r, "m={m}: cols={c} < rows={r}");
-            assert_eq!(c * r, m, "m={m}: {c} * {r} != {m}");
-        }
-    }
-
-    #[test]
-    fn pick_layout_composite_no_padding() {
-        // 15 frames, 128 px tiles, 8192 cap → 5x3, no padding.
-        let l = pick_layout(15, 128, 128, 8192, 8).unwrap();
-        assert_eq!(
-            l,
-            AtlasLayout {
-                cols: 5,
-                rows: 3,
-                padding: 0
-            }
-        );
-    }
-
-    #[test]
-    fn pick_layout_prime_1xn_fits() {
-        // 31 frames, 128 px tiles, 8192 cap → 31x1 = 3968px, fits.
-        let l = pick_layout(31, 128, 128, 8192, 8).unwrap();
-        assert_eq!(
-            l,
-            AtlasLayout {
-                cols: 31,
-                rows: 1,
-                padding: 0
-            }
-        );
-    }
-
-    #[test]
-    fn pick_layout_prime_overflow_pads_to_composite() {
-        // 41 frames at 256 px: 41*256 = 10496 > 8192. Try +1=42=7*6 → 7*256=1792.
-        let l = pick_layout(41, 256, 256, 8192, 8).unwrap();
-        assert_eq!(
-            l,
-            AtlasLayout {
-                cols: 7,
-                rows: 6,
-                padding: 1
-            }
-        );
-    }
-
-    #[test]
-    fn pick_layout_composite_overflow_pads_further() {
-        // 100 frames at 1024 px, 8192 cap: 10x10 → 10*1024=10240 overflow.
-        // Walk forward until something with cols<=8 turns up (or None within k_max).
-        let l = pick_layout(100, 1024, 1024, 8192, 8);
-        if let Some(layout) = l {
-            assert!(layout.cols * 1024 <= 8192, "cols overflows: {layout:?}");
-            assert!(layout.rows * 1024 <= 8192, "rows overflows: {layout:?}");
-            assert!(layout.padding <= 8);
-        }
-    }
-
-    #[test]
-    fn pick_layout_cited_example_34_at_256() {
-        // From the spec: 34 frames @ 256 px tile width, 8192 cap.
-        // 34 = 17x2 → 17*256 = 4352, 2*256 = 512. Fits, padding=0.
-        let l = pick_layout(34, 256, 256, 8192, 8).unwrap();
-        assert_eq!(
-            l,
-            AtlasLayout {
-                cols: 17,
-                rows: 2,
-                padding: 0
-            }
-        );
-    }
-
-    #[test]
-    fn pick_layout_exhaustion_returns_none() {
-        // tile_w > max_dim → no layout possible.
-        assert!(pick_layout(1, 9000, 128, 8192, 8).is_none());
-        // tile_h > max_dim → no layout possible.
-        assert!(pick_layout(1, 128, 9000, 8192, 8).is_none());
+    #[allow(dead_code)]
+    fn tall_aspect() -> f64 {
+        9.0 / 16.0
     }
 
     #[test]
     fn pick_layout_zero_inputs_return_none() {
-        assert!(pick_layout(0, 128, 128, 8192, 8).is_none());
-        assert!(pick_layout(10, 0, 128, 8192, 8).is_none());
-        assert!(pick_layout(10, 128, 0, 8192, 8).is_none());
-        assert!(pick_layout(10, 128, 128, 0, 8).is_none());
+        assert!(pick_layout(0, 1.0, 2048, 8192, 8).is_none());
+        assert!(pick_layout(10, 0.0, 2048, 8192, 8).is_none());
+        assert!(pick_layout(10, 1.0, 0, 8192, 8).is_none());
+    }
+
+    #[test]
+    fn pick_layout_single_frame() {
+        let l = pick_layout(1, 1.0, 2048, 8192, 8).unwrap();
+        assert_eq!(l.cols, 1);
+        assert_eq!(l.rows, 1);
+        assert_eq!(l.padding, 0);
+        assert!(l.tile_width >= MIN_TILE_DIM);
+        assert!(l.tile_height >= MIN_TILE_DIM);
+    }
+
+    #[test]
+    fn pick_layout_square_aspect_uses_squareish_grid() {
+        let l = pick_layout(64, 1.0, 2048, 8192, 8).unwrap();
+        assert_eq!(l.cols * l.rows, 64);
+        assert_eq!(l.padding, 0);
+        // Square tiles for square aspect.
+        let diff = (l.tile_width as f64 / l.tile_height as f64 - 1.0).abs();
+        assert!(diff < 0.1, "tile aspect diff too large: {diff}");
+    }
+
+    #[test]
+    fn pick_layout_wide_aspect_prefers_wide_grid() {
+        let aspect = wide_aspect();
+        let l = pick_layout(64, aspect, 2048, 8192, 8).unwrap();
+        // Tiles should be wider than tall to match input aspect
+        let tile_aspect = l.tile_width as f64 / l.tile_height as f64;
+        let diff = (tile_aspect - aspect).abs();
+        assert!(diff < 0.3, "tile aspect {tile_aspect} too far from input {aspect}: diff {diff}");
+    }
+
+    #[test]
+    fn pick_layout_tall_aspect_prefers_tall_grid() {
+        let aspect = tall_aspect();
+        let l = pick_layout(64, aspect, 2048, 8192, 8).unwrap();
+        let tile_aspect = l.tile_width as f64 / l.tile_height as f64;
+        let diff = (tile_aspect - aspect).abs();
+        assert!(diff < 0.3, "tile aspect {tile_aspect} too far from input {aspect}: diff {diff}");
+    }
+
+    #[test]
+    fn pick_layout_waste_minimized_when_aspect_equal() {
+        // 50 frames: 10x5 (waste 0) vs 7x8 (waste 6) — should pick 10x5.
+        let l = pick_layout(50, 1.0, 2048, 8192, 8).unwrap();
+        assert_eq!(l.cols * l.rows, 50, "should pick exact-fit layout");
+        assert_eq!(l.padding, 0);
+    }
+
+    #[test]
+    fn pick_layout_fits_within_max_dim() {
+        let l = pick_layout(100, 1.0, 2048, 4096, 8).unwrap();
+        assert!(l.cols * l.tile_width <= 4096);
+        assert!(l.rows * l.tile_height <= 4096);
     }
 
     #[test]
     fn pick_layout_padding_bound_respected() {
-        // n=41, tile_w=256, max=8192: k=0 fails (41*256>8192),
-        // k=1 → 42=7x6 succeeds.
-        assert!(pick_layout(41, 256, 256, 8192, 0).is_none());
-        assert!(pick_layout(41, 256, 256, 8192, 1).is_some());
+        // With k_max=0 and an odd prime count that can't be factored, expect
+        // cols*rows == frame_count but may still work with 1xN.
+        let l = pick_layout(7, 1.0, 2048, 8192, 0);
+        assert!(l.is_some(), "7 frames should fit in 7x1 or 1x7");
+        if let Some(layout) = l {
+            assert!(layout.cols * layout.rows >= 7);
+            assert_eq!(layout.padding, 0);
+        }
+    }
+
+    #[test]
+    fn compute_tile_dims_square_grid_square_aspect() {
+        let (tw, th) = compute_tile_dims(2048, 4, 4, 1.0);
+        assert_eq!(tw, 512);
+        assert_eq!(th, 512);
+    }
+
+    #[test]
+    fn compute_tile_dims_wide_aspect() {
+        let (tw, th) = compute_tile_dims(2048, 4, 4, 16.0 / 9.0);
+        // tw = 2048/4 = 512, th = 512 / (16/9) = 288
+        assert_eq!(tw, 512);
+        assert_eq!(th, 288);
+    }
+
+    #[test]
+    fn compute_tile_dims_tall_aspect() {
+        let (tw, th) = compute_tile_dims(2048, 4, 4, 9.0 / 16.0);
+        // tw = 2048/4 = 512, th = 512 / (9/16) = 910.2 -> 910
+        // But 4 * 910 = 3640 > 2048, so clamp: th = 2048/4 = 512, tw = 512 * 9/16 = 288
+        assert_eq!(tw, 288);
+        assert_eq!(th, 512);
+    }
+
+    #[test]
+    fn compute_tile_dims_caps_height_when_rows_overflow() {
+        // 2048 res, 2 cols, 50 rows = tight vertically
+        let (tw, th) = compute_tile_dims(2048, 2, 50, 1.0);
+        // tw = 2048/2 = 1024, th = 1024
+        // But 50 * 1024 = 51200 > 2048, so: th = 2048/50 = 40, tw = 40*1 = 40
+        assert_eq!(th, 40);
+        assert_eq!(tw, 40);
     }
 }

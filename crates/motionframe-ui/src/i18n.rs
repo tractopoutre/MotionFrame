@@ -40,6 +40,8 @@ pub enum Key {
 
     // Sidebar — Atlas group
     AtlasHeading,
+    AtlasResolution,
+    AtlasResolutionHover,
     TilesPerRow,
     TilesPerColumn,
     LockBadgeAuto,
@@ -57,6 +59,7 @@ pub enum Key {
     Extrude,
     ExtrudeHover,
     OutputFrames,
+    OutputFramesHover,
     TrimTailForExactOutputCount,
     TrimTailForExactOutputCountHover,
     OutputFrameSummary,
@@ -145,6 +148,27 @@ pub enum Key {
     ErrWorkerPanic,
     ErrSaveOutputs,
     ClearSelection,
+
+    // Sidebar — Output group
+    OutputHeading,
+    OutputFormat,
+    OutputFormatHover,
+    OutputBaseName,
+    OutputBaseNameHover,
+    OutputTypeColor,
+    OutputTypeColorHover,
+    OutputTypeMotion,
+    OutputTypeMotionHover,
+    OutputTypeMeta,
+    OutputTypeMetaHover,
+    OutputPreview,
+    OutputPreviewEmpty,
+    // Sidebar — Frame range
+    FrameRangeHeading,
+    StartFrame,
+    StartFrameHover,
+    EndFrame,
+    EndFrameHover,
 }
 
 /// Translate `key` to the user-visible string for `lang`.
@@ -170,6 +194,10 @@ pub const fn t(lang: Lang, key: Key) -> &'static str {
 
         // Sidebar — Atlas
         (Lang::En, Key::AtlasHeading) => "Atlas",
+        (Lang::En, Key::AtlasResolution) => "Atlas resolution:",
+        (Lang::En, Key::AtlasResolutionHover) => {
+            "Target total atlas pixel dimension. Tile size is auto-computed from this and the input aspect ratio."
+        }
         (Lang::En, Key::TilesPerRow) => "Tiles per row:",
         (Lang::En, Key::TilesPerColumn) => "Tiles per column:",
         (Lang::En, Key::LockBadgeAuto) => "(auto)",
@@ -193,6 +221,9 @@ pub const fn t(lang: Lang, key: Key) -> &'static str {
              near tile boundaries with linear filtering."
         }
         (Lang::En, Key::OutputFrames) => "Output frames:",
+        (Lang::En, Key::OutputFramesHover) => {
+            "Number of frames to output. Clamped to the available frame count and atlas slots."
+        }
         (Lang::En, Key::TrimTailForExactOutputCount) => "Trim tail for exact output count",
         (Lang::En, Key::TrimTailForExactOutputCountHover) => {
             "Allows exact output frame counts by ignoring ending input frames. Source files are not changed."
@@ -313,6 +344,40 @@ pub const fn t(lang: Lang, key: Key) -> &'static str {
         (Lang::En, Key::ErrSaveOutputs) => "Save failed: {0}",
         (Lang::En, Key::ClearSelection) => "×",
 
+        // Sidebar — Output
+        (Lang::En, Key::OutputHeading) => "Output",
+        (Lang::En, Key::OutputFormat) => "Format",
+        (Lang::En, Key::OutputFormatHover) => {
+            "Use [basename], [cols], [rows], [type], [ext] tokens"
+        }
+        (Lang::En, Key::OutputBaseName) => "Base name",
+        (Lang::En, Key::OutputBaseNameHover) => {
+            "Override the [basename] token (empty = auto-detect)"
+        }
+        (Lang::En, Key::OutputTypeColor) => "Color label",
+        (Lang::En, Key::OutputTypeColorHover) => {
+            "What [type] resolves to in the color atlas filename"
+        }
+        (Lang::En, Key::OutputTypeMotion) => "Motion label",
+        (Lang::En, Key::OutputTypeMotionHover) => {
+            "What [type] resolves to in the motion atlas filename"
+        }
+        (Lang::En, Key::OutputTypeMeta) => "Meta label",
+        (Lang::En, Key::OutputTypeMetaHover) => {
+            "What [type] resolves to in the metadata filename"
+        }
+        (Lang::En, Key::OutputPreview) => "Preview",
+        (Lang::En, Key::OutputPreviewEmpty) => "Using default format",
+
+        // Sidebar — Frame range
+        (Lang::En, Key::FrameRangeHeading) => "Frame Range",
+        (Lang::En, Key::StartFrame) => "Start frame",
+        (Lang::En, Key::StartFrameHover) => "First frame to process (0-based)",
+        (Lang::En, Key::EndFrame) => "End frame",
+        (Lang::En, Key::EndFrameHover) => {
+            "Last frame to process (0-based, exclusive; 0 = all)"
+        }
+
         // Sidebar — Input
         (Lang::Ja, Key::InputHeading) => "入力",
         (Lang::Ja, Key::InputTilesPerRow) => "入力タイル数(横):",
@@ -324,6 +389,10 @@ pub const fn t(lang: Lang, key: Key) -> &'static str {
 
         // Sidebar — Atlas
         (Lang::Ja, Key::AtlasHeading) => "アトラス",
+        (Lang::Ja, Key::AtlasResolution) => "アトラス解像度:",
+        (Lang::Ja, Key::AtlasResolutionHover) => {
+            "目標アトラス全体のピクセル寸法。タイルサイズはこれと入力アスペクト比から自動計算されます。"
+        }
         (Lang::Ja, Key::TilesPerRow) => "タイル数(横):",
         (Lang::Ja, Key::TilesPerColumn) => "タイル数(縦):",
         (Lang::Ja, Key::LockBadgeAuto) => "(自動)",
@@ -347,6 +416,9 @@ pub const fn t(lang: Lang, key: Key) -> &'static str {
              リニアフィルタでタイル境界付近をサンプルする場合に使用します。"
         }
         (Lang::Ja, Key::OutputFrames) => "出力フレーム数:",
+        (Lang::Ja, Key::OutputFramesHover) => {
+            "出力するフレーム数。利用可能なフレーム数とアトラススロットに制限されます。"
+        }
         (Lang::Ja, Key::TrimTailForExactOutputCount) => "末尾を無視して出力数を正確に合わせる",
         (Lang::Ja, Key::TrimTailForExactOutputCountHover) => {
             "末尾の入力フレームを無視して、出力フレーム数を正確に合わせます。元ファイルは変更されません。"
@@ -469,6 +541,40 @@ pub const fn t(lang: Lang, key: Key) -> &'static str {
         (Lang::Ja, Key::ErrWorkerPanic) => "ワーカースレッドが異常終了しました: {0}",
         (Lang::Ja, Key::ErrSaveOutputs) => "保存に失敗しました: {0}",
         (Lang::Ja, Key::ClearSelection) => "×",
+
+        // Sidebar — Output
+        (Lang::Ja, Key::OutputHeading) => "出力",
+        (Lang::Ja, Key::OutputFormat) => "フォーマット",
+        (Lang::Ja, Key::OutputFormatHover) => {
+            "[basename], [cols], [rows], [type], [ext] トークンを使用"
+        }
+        (Lang::Ja, Key::OutputBaseName) => "ベース名",
+        (Lang::Ja, Key::OutputBaseNameHover) => {
+            "[basename] トークンの上書き（空=自動検出）"
+        }
+        (Lang::Ja, Key::OutputTypeColor) => "カラーラベル",
+        (Lang::Ja, Key::OutputTypeColorHover) => {
+            "カラーアトラスファイル名の [type] 値"
+        }
+        (Lang::Ja, Key::OutputTypeMotion) => "モーションラベル",
+        (Lang::Ja, Key::OutputTypeMotionHover) => {
+            "モーションアトラスファイル名の [type] 値"
+        }
+        (Lang::Ja, Key::OutputTypeMeta) => "メタラベル",
+        (Lang::Ja, Key::OutputTypeMetaHover) => {
+            "メタデータファイル名の [type] 値"
+        }
+        (Lang::Ja, Key::OutputPreview) => "プレビュー",
+        (Lang::Ja, Key::OutputPreviewEmpty) => "デフォルトフォーマットを使用中",
+
+        // Sidebar — Frame range
+        (Lang::Ja, Key::FrameRangeHeading) => "フレーム範囲",
+        (Lang::Ja, Key::StartFrame) => "開始フレーム",
+        (Lang::Ja, Key::StartFrameHover) => "処理する最初のフレーム（0始まり）",
+        (Lang::Ja, Key::EndFrame) => "終了フレーム",
+        (Lang::Ja, Key::EndFrameHover) => {
+            "処理する最後のフレーム（0始まり、排他。0=すべて）"
+        }
     }
 }
 
@@ -517,6 +623,8 @@ mod tests {
         Key::InputTilesPerColumn,
         Key::InputTilesHover,
         Key::AtlasHeading,
+        Key::AtlasResolution,
+        Key::AtlasResolutionHover,
         Key::TilesPerRow,
         Key::TilesPerColumn,
         Key::LockBadgeAuto,
@@ -534,6 +642,7 @@ mod tests {
         Key::Extrude,
         Key::ExtrudeHover,
         Key::OutputFrames,
+        Key::OutputFramesHover,
         Key::TrimTailForExactOutputCount,
         Key::TrimTailForExactOutputCountHover,
         Key::OutputFrameSummary,
@@ -604,6 +713,24 @@ mod tests {
         Key::ErrWorkerPanic,
         Key::ErrSaveOutputs,
         Key::ClearSelection,
+        Key::OutputHeading,
+        Key::OutputFormat,
+        Key::OutputFormatHover,
+        Key::OutputBaseName,
+        Key::OutputBaseNameHover,
+        Key::OutputTypeColor,
+        Key::OutputTypeColorHover,
+        Key::OutputTypeMotion,
+        Key::OutputTypeMotionHover,
+        Key::OutputTypeMeta,
+        Key::OutputTypeMetaHover,
+        Key::OutputPreview,
+        Key::OutputPreviewEmpty,
+        Key::FrameRangeHeading,
+        Key::StartFrame,
+        Key::StartFrameHover,
+        Key::EndFrame,
+        Key::EndFrameHover,
     ];
 
     /// Compile-time guard: adding a `Key` variant without updating this
@@ -615,7 +742,9 @@ mod tests {
             | Key::InputTilesPerRow
             | Key::InputTilesPerColumn
             | Key::InputTilesHover
-            | Key::AtlasHeading
+            |             Key::AtlasHeading
+            | Key::AtlasResolution
+            | Key::AtlasResolutionHover
             | Key::TilesPerRow
             | Key::TilesPerColumn
             | Key::LockBadgeAuto
@@ -633,6 +762,7 @@ mod tests {
             | Key::Extrude
             | Key::ExtrudeHover
             | Key::OutputFrames
+            | Key::OutputFramesHover
             | Key::TrimTailForExactOutputCount
             | Key::TrimTailForExactOutputCountHover
             | Key::OutputFrameSummary
@@ -702,7 +832,25 @@ mod tests {
             | Key::ErrMetadataSerialize
             | Key::ErrWorkerPanic
             | Key::ErrSaveOutputs
-            | Key::ClearSelection => {}
+            | Key::ClearSelection
+            | Key::OutputHeading
+            | Key::OutputFormat
+            | Key::OutputFormatHover
+            | Key::OutputBaseName
+            | Key::OutputBaseNameHover
+            | Key::OutputTypeColor
+            | Key::OutputTypeColorHover
+            | Key::OutputTypeMotion
+            | Key::OutputTypeMotionHover
+            | Key::OutputTypeMeta
+            | Key::OutputTypeMetaHover
+            | Key::OutputPreview
+            | Key::OutputPreviewEmpty
+            | Key::FrameRangeHeading
+            | Key::StartFrame
+            | Key::StartFrameHover
+            | Key::EndFrame
+            | Key::EndFrameHover => {}
         }
     }
 }

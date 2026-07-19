@@ -47,6 +47,9 @@ pub struct ConvertArgs {
     /// Output tile width in pixels.
     #[arg(long)]
     pub tile_width: Option<u32>,
+    /// Target total atlas resolution in pixels (auto-computes tile size).
+    #[arg(long)]
+    pub atlas_resolution: Option<u32>,
     /// Output atlas layout mode.
     #[arg(long, value_enum)]
     pub layout: Option<LayoutMode>,
