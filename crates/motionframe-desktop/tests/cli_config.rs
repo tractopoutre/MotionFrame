@@ -51,6 +51,13 @@ const fn empty_args() -> ConvertArgs {
         input_atlas_rows: None,
         trim_tail_flag: false,
         no_trim_tail: false,
+        output_name_format: None,
+        output_name_basename: None,
+        output_type_color: None,
+        output_type_motion: None,
+        output_type_meta: None,
+        start_frame: None,
+        end_frame: None,
     }
 }
 

@@ -116,6 +116,27 @@ pub struct ConvertArgs {
     /// Keep source tail behavior untrimmed.
     #[arg(long = "no-trim-tail")]
     pub no_trim_tail: bool,
+    /// Output filename format string (tokens: [basename], [cols], [rows], [type], [ext]).
+    #[arg(long = "out-format")]
+    pub output_name_format: Option<String>,
+    /// Override the [basename] token in the output format.
+    #[arg(long = "out-base")]
+    pub output_name_basename: Option<String>,
+    /// Label for [type] token in color atlas filename.
+    #[arg(long = "type-color")]
+    pub output_type_color: Option<String>,
+    /// Label for [type] token in motion atlas filename.
+    #[arg(long = "type-motion")]
+    pub output_type_motion: Option<String>,
+    /// Label for [type] token in metadata filename.
+    #[arg(long = "type-meta")]
+    pub output_type_meta: Option<String>,
+    /// First frame to process (0-based, inclusive).
+    #[arg(long = "start")]
+    pub start_frame: Option<u32>,
+    /// Last frame to process (0-based, exclusive). 0 = all frames.
+    #[arg(long = "end")]
+    pub end_frame: Option<u32>,
 }
 
 /// Progress output mode for the `--progress` flag.
@@ -186,5 +207,50 @@ impl ConvertArgs {
         } else {
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn parse_out_format_flag() {
+        let args = ConvertArgs::parse_from(["test", "--out-format", "[basename].[ext]"]);
+        assert_eq!(args.output_name_format.unwrap(), "[basename].[ext]");
+    }
+
+    #[test]
+    fn parse_out_base_flag() {
+        let args = ConvertArgs::parse_from(["test", "--out-base", "custom_name"]);
+        assert_eq!(args.output_name_basename, Some("custom_name".into()));
+    }
+
+    #[test]
+    fn parse_type_label_flags() {
+        let args = ConvertArgs::parse_from([
+            "test",
+            "--type-color", "",
+            "--type-motion", "_vec",
+            "--type-meta", "_metadata",
+        ]);
+        assert_eq!(args.output_type_color, Some("".into()));
+        assert_eq!(args.output_type_motion, Some("_vec".into()));
+        assert_eq!(args.output_type_meta, Some("_metadata".into()));
+    }
+
+    #[test]
+    fn parse_start_end_flags() {
+        let args = ConvertArgs::parse_from(["test", "--start", "5", "--end", "20"]);
+        assert_eq!(args.start_frame, Some(5));
+        assert_eq!(args.end_frame, Some(20));
+    }
+
+    #[test]
+    fn start_end_default_to_none() {
+        let args = ConvertArgs::parse_from(["test"]);
+        assert_eq!(args.start_frame, None);
+        assert_eq!(args.end_frame, None);
     }
 }
