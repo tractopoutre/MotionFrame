@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, OnceLock};
 
 use motionframe_engine::io::{sequence, slice_atlas, InMemoryFrames};
-use motionframe_engine::pipeline::run::run_pipeline;
+use motionframe_engine::pipeline::run::{run_pipeline, run_pipeline_with_gpu};
 use motionframe_engine::pipeline::{GenerateOptions, ImageRgba8, PipelineError, Progress};
 use motionframe_ui::i18n::{fmt, t, Key, Lang};
 use motionframe_ui::platform::{EncodedFrame, GenerationEvent, Platform};
@@ -103,6 +103,21 @@ impl DesktopPlatform {
         let worker_lang = self.initial_lang;
 
         let handle = std::thread::spawn(move || {
+            let gpu = motionframe_engine::gpu::GpuPipeline::try_init();
+            if gpu.is_some() {
+                eprintln!("[gpu] using GPU pipeline");
+                let _ = tx.send(GenerationEvent::Progress(Progress::Stage {
+                    name: "GPU pipeline".into(),
+                    fraction: 0.0,
+                }));
+            } else {
+                eprintln!("[gpu] no GPU device, using CPU pipeline");
+                let _ = tx.send(GenerationEvent::Progress(Progress::Stage {
+                    name: "CPU pipeline".into(),
+                    fraction: 0.0,
+                }));
+            }
+
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 if cancel_for_worker.load(Ordering::Relaxed) {
                     return Err(PipelineError::Cancelled);
@@ -137,7 +152,11 @@ impl DesktopPlatform {
                         .send(GenerationEvent::Progress(p));
                 };
                 let cancel_fn = || cancel_for_worker.load(Ordering::Relaxed);
-                run_pipeline(&source, &opts, &progress_fn, &cancel_fn)
+                if let Some(gpu) = gpu.as_ref() {
+                    run_pipeline_with_gpu(&source, &opts, &progress_fn, &cancel_fn, Some(gpu))
+                } else {
+                    run_pipeline(&source, &opts, &progress_fn, &cancel_fn)
+                }
             }));
             let event = match result {
                 Ok(Ok(encode_result)) => GenerationEvent::Done(encode_result),
