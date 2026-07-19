@@ -8,4 +8,7 @@ pub mod pipeline;
 pub mod viz;
 
 #[cfg(feature = "preview")]
+pub mod gpu;
+
+#[cfg(feature = "preview")]
 pub mod preview;

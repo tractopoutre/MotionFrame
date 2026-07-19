@@ -147,6 +147,27 @@ pub fn run_pipeline(
     progress: &(dyn Fn(Progress) + Sync),
     cancel: &(dyn Fn() -> bool + Sync),
 ) -> Result<EncodeResult, PipelineError> {
+    run_pipeline_inner(frames, opts, progress, cancel)
+}
+
+/// Run pipeline with optional GPU acceleration (available with `preview` feature).
+#[cfg(feature = "preview")]
+pub fn run_pipeline_with_gpu(
+    frames: &dyn crate::io::FrameSource,
+    opts: &GenerateOptions,
+    progress: &(dyn Fn(Progress) + Sync),
+    cancel: &(dyn Fn() -> bool + Sync),
+    _gpu: Option<&crate::gpu::GpuPipeline>,
+) -> Result<EncodeResult, PipelineError> {
+    run_pipeline_inner(frames, opts, progress, cancel)
+}
+
+fn run_pipeline_inner(
+    frames: &dyn crate::io::FrameSource,
+    opts: &GenerateOptions,
+    progress: &(dyn Fn(Progress) + Sync),
+    cancel: &(dyn Fn() -> bool + Sync),
+) -> Result<EncodeResult, PipelineError> {
     // 1. Validate: need >= 2 frames
     if frames.len() < 2 {
         return Err(PipelineError::TooFewFrames(frames.len()));
