@@ -347,12 +347,12 @@ impl GpuPipeline {
 
     /// Run the full GPU-accelerated flow pipeline on a set of frames.
     ///
-    /// Returns (color_atlas, motion_atlas) as RGBA8 images.
+    /// Returns (color_atlas, motion_atlas, max_strength).
     pub fn compute(
         &self,
         frames: &[ImageRgba8],
         options: &GenerateOptions,
-    ) -> Result<(ImageRgba8, ImageRgba8), String> {
+    ) -> Result<(ImageRgba8, ImageRgba8, f64), String> {
         if frames.len() < 2 {
             return Err("Need at least 2 frames".into());
         }
@@ -471,7 +471,7 @@ impl GpuPipeline {
         // Build color atlas from selected frames
         let color_atlas = build_color_atlas_simple(&tile_frames, atlas_cols, atlas_rows, tile_w, tile_h);
 
-        Ok((color_atlas, motion_atlas))
+        Ok((color_atlas, motion_atlas, max_strength as f64))
     }
 
     // ---- Per-pass helpers ----

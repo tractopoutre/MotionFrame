@@ -172,13 +172,13 @@ pub fn run_pipeline_with_gpu(
             return Err(PipelineError::Cancelled);
         }
         match gpu.compute(&premul_frames, opts) {
-            Ok((color_atlas, motion_atlas)) => {
+            Ok((color_atlas, motion_atlas, strength)) => {
                 let tile = opts.tile_pixel_width;
                 let (cols, rows) = opts.atlas_dims;
                 return Ok(EncodeResult {
                     color_atlas,
                     motion_atlas,
-                    strength: 0.0,
+                    strength,
                     total_frames: cols * rows,
                     atlas_width: cols * tile,
                     atlas_height: rows * tile,
