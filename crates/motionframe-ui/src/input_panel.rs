@@ -35,32 +35,15 @@ struct OutputSummary {
     output_count: usize,
     frame_skip: u32,
     ignored_tail_frames: Option<u32>,
-    wasted_tiles: Option<u32>,
 }
 
 impl OutputSummary {
     #[must_use]
-    fn new(
-        output_count: usize,
-        frame_skip: u32,
-        ignored_tail_frames: u32,
-        atlas_dims: (u32, u32),
-    ) -> Self {
-        let tile_count = atlas_dims.0.saturating_mul(atlas_dims.1);
-        let wasted_tiles = tile_count.saturating_sub(output_count as u32);
+    fn new(output_count: usize, frame_skip: u32, ignored_tail_frames: u32) -> Self {
         Self {
             output_count,
             frame_skip,
             ignored_tail_frames: (ignored_tail_frames > 0).then_some(ignored_tail_frames),
-            wasted_tiles: (wasted_tiles > 0).then_some(wasted_tiles),
-        }
-    }
-
-    #[must_use]
-    const fn without_wasted_tiles(self) -> Self {
-        Self {
-            wasted_tiles: None,
-            ..self
         }
     }
 }
@@ -151,10 +134,9 @@ fn show_atlas_group(
 ) {
     ui.heading(t(lang, Key::AtlasHeading));
 
-    show_output_frames_drag_value(
+    show_auto_output_count(
         ui,
         options,
-        atlas_layout_manual,
         n_after_range,
         lang,
     );
@@ -263,66 +245,29 @@ fn show_atlas_group(
 }
 
 /// Output-frames integer DragValue, replacing the old detent-based slider.
-fn show_output_frames_drag_value(
+fn show_auto_output_count(
     ui: &mut egui::Ui,
     options: &mut GenerateOptions,
-    atlas_layout_manual: &mut bool,
     n_after_range: u32,
     lang: Lang,
 ) {
-    let max_output = if n_after_range > 0 {
-        let max_slots = options.atlas_dims.0.saturating_mul(options.atlas_dims.1);
-        max_slots.min(n_after_range)
+    if n_after_range == 0 {
+        return;
+    }
+    let max_slots = options.atlas_dims.0.saturating_mul(options.atlas_dims.1);
+    let output_count = max_slots.min(n_after_range);
+    options.output_frames = output_count;
+    options.frame_skip = if output_count > 0 {
+        (n_after_range / output_count).saturating_sub(1)
     } else {
         0
     };
 
-    ui.horizontal(|ui| {
-        ui.label(t(lang, Key::OutputFrames));
-        let mut val = options.output_frames;
-        let max_clamped = max_output.max(1);
-        let resp = ui.add(egui::DragValue::new(&mut val).range(1..=max_clamped));
-        if resp.changed() {
-            options.output_frames = val.clamp(1, max_clamped);
-            options.frame_skip = 0; // No auto skip in DragValue mode
-            *atlas_layout_manual = false;
-        }
-        resp.on_hover_text(t(lang, Key::OutputFramesHover));
-    });
-
-    // Show summary: output count and effective frame info
-    if n_after_range > 0 {
-        show_output_summary(
-            ui,
-            OutputSummary::new(
-                options.output_frames as usize,
-                0,
-                0,
-                options.atlas_dims,
-            ),
-            lang,
-        );
-    }
-}
-
-fn output_summary_for_detent(
-    canonical_layouts: &[DetentEntry],
-    idx: usize,
-    atlas_dims: (u32, u32),
-    show_wasted_tiles: bool,
-) -> OutputSummary {
-    let entry = &canonical_layouts[idx];
-    let summary = OutputSummary::new(
-        entry.output_count as usize,
-        entry.frame_skip,
-        entry.ignored_tail_frames,
-        atlas_dims,
+    show_output_summary(
+        ui,
+        OutputSummary::new(output_count as usize, options.frame_skip, 0),
+        lang,
     );
-    if show_wasted_tiles {
-        summary
-    } else {
-        summary.without_wasted_tiles()
-    }
 }
 
 // Atlas group surfaces output count prominently before other controls.
@@ -347,12 +292,6 @@ fn show_output_summary(ui: &mut egui::Ui, summary: OutputSummary, lang: Lang) {
                     t(lang, Key::IgnoredTailFramesSummary),
                     &[&ignored_tail_frames],
                 ),
-            );
-        }
-        if let Some(wasted_tiles) = summary.wasted_tiles {
-            ui.colored_label(
-                egui::Color32::from_rgb(210, 150, 60),
-                fmt(t(lang, Key::WastedTilesSummary), &[&wasted_tiles]),
             );
         }
     });
@@ -618,67 +557,16 @@ fn show_frame_range_group(ui: &mut egui::Ui, options: &mut GenerateOptions, n_in
 mod tests {
     use super::*;
 
-    #[test]
-    fn output_summary_hides_zero_wasted_tiles() {
-        let summary = OutputSummary::new(48, 1, 0, (8, 6));
-
-        assert_eq!(summary.output_count, 48);
-        assert_eq!(summary.frame_skip, 1);
-        assert_eq!(summary.ignored_tail_frames, None);
-        assert_eq!(summary.wasted_tiles, None);
-    }
-
-    #[test]
-    fn output_summary_reports_nonzero_wasted_tiles() {
-        let summary = OutputSummary::new(48, 1, 0, (7, 7));
-
-        assert_eq!(summary.output_count, 48);
-        assert_eq!(summary.frame_skip, 1);
-        assert_eq!(summary.wasted_tiles, Some(1));
-    }
-
-    #[test]
-    fn output_summary_uses_selected_slider_detent() {
-        let layouts = [
-            DetentEntry {
-                output_count: 2,
-                frame_skip: 4,
-                ignored_tail_frames: 0,
-            },
-            DetentEntry {
-                output_count: 5,
-                frame_skip: 1,
-                ignored_tail_frames: 0,
-            },
-        ];
-
-        let summary = output_summary_for_detent(&layouts, 1, (3, 2), true);
-
-        assert_eq!(summary.output_count, 5);
-        assert_eq!(summary.frame_skip, 1);
-        assert_eq!(summary.wasted_tiles, Some(1));
-    }
-
-    #[test]
-    fn output_summary_can_suppress_transient_wasted_tiles() {
-        let layouts = [
-            DetentEntry {
-                output_count: 2,
-                frame_skip: 4,
-                ignored_tail_frames: 0,
-            },
-            DetentEntry {
-                output_count: 5,
-                frame_skip: 1,
-                ignored_tail_frames: 0,
-            },
-        ];
-
-        let summary = output_summary_for_detent(&layouts, 1, (3, 2), false);
-
-        assert_eq!(summary.output_count, 5);
-        assert_eq!(summary.frame_skip, 1);
-        assert_eq!(summary.wasted_tiles, None);
+    fn output_summary_for_detent(
+        canonical_layouts: &[DetentEntry],
+        idx: usize,
+    ) -> OutputSummary {
+        let entry = &canonical_layouts[idx];
+        OutputSummary::new(
+            entry.output_count as usize,
+            entry.frame_skip,
+            entry.ignored_tail_frames,
+        )
     }
 
     #[test]
@@ -689,7 +577,7 @@ mod tests {
             ignored_tail_frames: 4,
         }];
 
-        let summary = output_summary_for_detent(&layouts, 0, (4, 4), true);
+        let summary = output_summary_for_detent(&layouts, 0);
 
         assert_eq!(summary.output_count, 16);
         assert_eq!(summary.frame_skip, 5);
@@ -704,7 +592,7 @@ mod tests {
             ignored_tail_frames: 0,
         }];
 
-        let summary = output_summary_for_detent(&layouts, 0, (5, 4), true);
+        let summary = output_summary_for_detent(&layouts, 0);
 
         assert_eq!(summary.ignored_tail_frames, None);
     }
