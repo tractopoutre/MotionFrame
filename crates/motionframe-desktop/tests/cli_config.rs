@@ -122,6 +122,13 @@ fn cli_flags_override_config() {
         input_atlas_rows: None,
         trim_tail: Some(false),
         progress: Some(ProgressMode::Plain),
+        output_name_format: None,
+        output_name_basename: None,
+        output_type_color: None,
+        output_type_motion: None,
+        output_type_meta: None,
+        start_frame: None,
+        end_frame: None,
     };
     let mut args = empty_args();
     args.input = Some(PathBuf::from("from-cli"));
