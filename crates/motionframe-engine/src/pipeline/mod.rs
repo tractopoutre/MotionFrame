@@ -132,21 +132,21 @@ pub struct GenerateOptions {
     #[serde(default = "default_output_atlas_max_dim")]
     pub output_atlas_max_dim: u32,
     /// Format string for output file naming. Tokens: `[basename]`, `[cols]`,
-    /// `[rows]`, `[type]`, `[ext]`. Empty string = use default.
+    /// `[rows]`, `[suffix]`, `[ext]`. Empty string = use default.
     #[serde(default)]
     pub output_name_format: String,
     /// Override for `[basename]` token. Empty = auto-derive from input.
     #[serde(default)]
     pub output_name_basename: String,
-    /// Label for `[type]` token in color atlas filenames.
+    /// Label for `[suffix]` token in color atlas filenames.
     #[serde(default)]
-    pub output_type_color: String,
-    /// Label for `[type]` token in motion atlas filenames.
+    pub output_suffix_color: String,
+    /// Label for `[suffix]` token in motion atlas filenames.
     #[serde(default)]
-    pub output_type_motion: String,
-    /// Label for `[type]` token in metadata filenames.
+    pub output_suffix_motion: String,
+    /// Label for `[suffix]` token in metadata filenames.
     #[serde(default)]
-    pub output_type_meta: String,
+    pub output_suffix_meta: String,
     /// First frame index to process (0-based, inclusive).
     #[serde(default)]
     pub start_frame: u32,
@@ -245,11 +245,11 @@ impl Default for GenerateOptions {
             resize_algorithm: Interpolation::Cubic,
             input_atlas_dims: None,
             output_atlas_max_dim: default_output_atlas_max_dim(),
-            output_name_format: "[basename]_[cols]x[rows][type].[ext]".into(),
+            output_name_format: "[basename]_[cols]x[rows][suffix].[ext]".into(),
             output_name_basename: String::new(),
-            output_type_color: String::new(),
-            output_type_motion: "_MV".into(),
-            output_type_meta: "_meta".into(),
+            output_suffix_color: String::new(),
+            output_suffix_motion: "_MV".into(),
+            output_suffix_meta: "_meta".into(),
             start_frame: 0,
             end_frame: 0,
         }
@@ -271,11 +271,11 @@ mod tests {
     #[test]
     fn output_name_format_defaults() {
         let opts = GenerateOptions::default();
-        assert_eq!(opts.output_name_format, "[basename]_[cols]x[rows][type].[ext]");
+        assert_eq!(opts.output_name_format, "[basename]_[cols]x[rows][suffix].[ext]");
         assert_eq!(opts.output_name_basename, "");
-        assert_eq!(opts.output_type_color, "");
-        assert_eq!(opts.output_type_motion, "_MV");
-        assert_eq!(opts.output_type_meta, "_meta");
+        assert_eq!(opts.output_suffix_color, "");
+        assert_eq!(opts.output_suffix_motion, "_MV");
+        assert_eq!(opts.output_suffix_meta, "_meta");
         assert_eq!(opts.start_frame, 0);
         assert_eq!(opts.end_frame, 0);
         assert_eq!(opts.atlas_resolution, 2048);

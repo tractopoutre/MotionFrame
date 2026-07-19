@@ -122,9 +122,9 @@ impl ConvertJob {
         };
         options.output_name_format = cfg.output_name_format.unwrap_or(options.output_name_format);
         options.output_name_basename = cfg.output_name_basename.unwrap_or(options.output_name_basename);
-        options.output_type_color = cfg.output_type_color.unwrap_or(options.output_type_color);
-        options.output_type_motion = cfg.output_type_motion.unwrap_or(options.output_type_motion);
-        options.output_type_meta = cfg.output_type_meta.unwrap_or(options.output_type_meta);
+        options.output_suffix_color = cfg.output_suffix_color.unwrap_or(options.output_suffix_color);
+        options.output_suffix_motion = cfg.output_suffix_motion.unwrap_or(options.output_suffix_motion);
+        options.output_suffix_meta = cfg.output_suffix_meta.unwrap_or(options.output_suffix_meta);
         options.start_frame = cfg.start_frame.unwrap_or(options.start_frame);
         options.end_frame = cfg.end_frame.unwrap_or(options.end_frame);
 

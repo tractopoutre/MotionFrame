@@ -119,21 +119,21 @@ pub struct ConvertArgs {
     /// Keep source tail behavior untrimmed.
     #[arg(long = "no-trim-tail")]
     pub no_trim_tail: bool,
-    /// Output filename format string (tokens: [basename], [cols], [rows], [type], [ext]).
+    /// Output filename format string (tokens: [basename], [cols], [rows], [suffix], [ext]).
     #[arg(long = "out-format")]
     pub output_name_format: Option<String>,
     /// Override the [basename] token in the output format.
     #[arg(long = "out-base")]
     pub output_name_basename: Option<String>,
-    /// Label for [type] token in color atlas filename.
-    #[arg(long = "type-color")]
-    pub output_type_color: Option<String>,
-    /// Label for [type] token in motion atlas filename.
-    #[arg(long = "type-motion")]
-    pub output_type_motion: Option<String>,
-    /// Label for [type] token in metadata filename.
-    #[arg(long = "type-meta")]
-    pub output_type_meta: Option<String>,
+    /// Label for [suffix] token in color atlas filename.
+    #[arg(long = "suffix-color")]
+    pub output_suffix_color: Option<String>,
+    /// Label for [suffix] token in motion atlas filename.
+    #[arg(long = "suffix-motion")]
+    pub output_suffix_motion: Option<String>,
+    /// Label for [suffix] token in metadata filename.
+    #[arg(long = "suffix-meta")]
+    pub output_suffix_meta: Option<String>,
     /// First frame to process (0-based, inclusive).
     #[arg(long = "start")]
     pub start_frame: Option<u32>,
@@ -231,16 +231,16 @@ mod tests {
     }
 
     #[test]
-    fn parse_type_label_flags() {
+    fn parse_suffix_flags() {
         let args = ConvertArgs::parse_from([
             "test",
-            "--type-color", "",
-            "--type-motion", "_vec",
-            "--type-meta", "_metadata",
+            "--suffix-color", "",
+            "--suffix-motion", "_vec",
+            "--suffix-meta", "_metadata",
         ]);
-        assert_eq!(args.output_type_color, Some("".into()));
-        assert_eq!(args.output_type_motion, Some("_vec".into()));
-        assert_eq!(args.output_type_meta, Some("_metadata".into()));
+        assert_eq!(args.output_suffix_color, Some("".into()));
+        assert_eq!(args.output_suffix_motion, Some("_vec".into()));
+        assert_eq!(args.output_suffix_meta, Some("_metadata".into()));
     }
 
     #[test]

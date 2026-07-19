@@ -247,6 +247,7 @@ impl<P: Platform> MotionFrameApp<P> {
             // Sequence mode.
             self.options.input_atlas_dims = None;
             self.source_label = label;
+            self.options.output_name_basename = derive_save_prefix(&frames[0].name);
         }
 
         self.default_save_name = derive_save_prefix(&frames[0].name);

@@ -161,16 +161,7 @@ fn show_atlas_group(
     let lock_badge = |is_manual: bool| if is_manual { manual_label } else { auto_label };
 
     ui.horizontal(|ui| {
-        ui.label(t(lang, Key::TilesPerRow));
-        let resp = ui.add(egui::DragValue::new(&mut options.atlas_dims.0).range(1..=256));
-        if resp.changed() {
-            *atlas_layout_manual = true;
-        }
-        ui.label(lock_badge(*atlas_layout_manual));
-    });
-
-    ui.horizontal(|ui| {
-        ui.label(t(lang, Key::TilesPerColumn));
+        ui.label(t(lang, Key::Rows));
         let resp = ui.add(egui::DragValue::new(&mut options.atlas_dims.1).range(1..=256));
         if resp.changed() {
             *atlas_layout_manual = true;
@@ -179,9 +170,18 @@ fn show_atlas_group(
     });
 
     ui.horizontal(|ui| {
+        ui.label(t(lang, Key::Columns));
+        let resp = ui.add(egui::DragValue::new(&mut options.atlas_dims.0).range(1..=256));
+        if resp.changed() {
+            *atlas_layout_manual = true;
+        }
+        ui.label(lock_badge(*atlas_layout_manual));
+    });
+
+    ui.horizontal(|ui| {
         ui.label(t(lang, Key::TilePixelWidth));
-        ui.add(egui::DragValue::new(&mut options.tile_pixel_width).range(1..=4096))
-            .on_hover_text(t(lang, Key::TilePixelWidthHover));
+        let tile_size = options.atlas_resolution / options.atlas_dims.0.max(options.atlas_dims.1).max(1);
+        ui.label(format!("{} px (auto)", tile_size));
     });
 
     // --- Max texture dim (POT ComboBox) ---
@@ -297,41 +297,27 @@ fn show_output_summary(ui: &mut egui::Ui, summary: OutputSummary, lang: Lang) {
     });
 }
 
-/// Predicted color/motion atlas pixel dims, with red highlight on overflow.
+/// Predicted color/motion atlas pixel dims.
 fn show_predicted_dims(
     ui: &mut egui::Ui,
     output_dims: Option<OutputDims>,
-    max_dim: u32,
+    _max_dim: u32,
     lang: Lang,
 ) {
     let Some(dims) = output_dims else { return };
     ui.add_space(4.0);
-    let warn = egui::Color32::from_rgb(220, 80, 80);
-    let over = |a: u32, b: u32| a > max_dim || b > max_dim;
 
     let color_text = fmt(
         t(lang, Key::ColorAtlasDims),
         &[&dims.color.0, &dims.color.1],
     );
-    if over(dims.color.0, dims.color.1) {
-        ui.colored_label(warn, color_text);
-    } else {
-        ui.label(color_text);
-    }
+    ui.label(color_text);
 
     let motion_text = fmt(
         t(lang, Key::MotionAtlasDims),
         &[&dims.motion.0, &dims.motion.1],
     );
-    if over(dims.motion.0, dims.motion.1) {
-        ui.colored_label(warn, motion_text);
-    } else {
-        ui.label(motion_text);
-    }
-
-    if dims.exceeds_limit(max_dim) {
-        ui.colored_label(warn, fmt(t(lang, Key::ExceedsTextureLimit), &[&max_dim]));
-    }
+    ui.label(motion_text);
 }
 
 /// Motion group — options that shape the motion atlas.
@@ -437,7 +423,7 @@ fn show_output_group(ui: &mut egui::Ui, options: &mut GenerateOptions, sequence_
         ui.add(
             egui::TextEdit::singleline(&mut options.output_name_format)
                 .desired_width(f32::INFINITY)
-                .hint_text("[basename]_[cols]x[rows][type].[ext]"),
+                .hint_text("[basename]_[cols]x[rows][suffix].[ext]"),
         )
         .on_hover_text(t(lang, Key::OutputFormatHover));
     });
@@ -453,21 +439,21 @@ fn show_output_group(ui: &mut egui::Ui, options: &mut GenerateOptions, sequence_
     });
 
     ui.horizontal(|ui| {
-        ui.label(t(lang, Key::OutputTypeColor));
-        ui.add(egui::TextEdit::singleline(&mut options.output_type_color).desired_width(80.0))
-            .on_hover_text(t(lang, Key::OutputTypeColorHover));
+        ui.label(t(lang, Key::ColorSuffix));
+        ui.add(egui::TextEdit::singleline(&mut options.output_suffix_color).desired_width(80.0))
+            .on_hover_text(t(lang, Key::ColorSuffixHover));
     });
 
     ui.horizontal(|ui| {
-        ui.label(t(lang, Key::OutputTypeMotion));
-        ui.add(egui::TextEdit::singleline(&mut options.output_type_motion).desired_width(80.0))
-            .on_hover_text(t(lang, Key::OutputTypeMotionHover));
+        ui.label(t(lang, Key::MotionSuffix));
+        ui.add(egui::TextEdit::singleline(&mut options.output_suffix_motion).desired_width(80.0))
+            .on_hover_text(t(lang, Key::MotionSuffixHover));
     });
 
     ui.horizontal(|ui| {
-        ui.label(t(lang, Key::OutputTypeMeta));
-        ui.add(egui::TextEdit::singleline(&mut options.output_type_meta).desired_width(80.0))
-            .on_hover_text(t(lang, Key::OutputTypeMetaHover));
+        ui.label(t(lang, Key::MetaSuffix));
+        ui.add(egui::TextEdit::singleline(&mut options.output_suffix_meta).desired_width(80.0))
+            .on_hover_text(t(lang, Key::MetaSuffixHover));
     });
 
     // Live preview (only when a sequence is loaded)
@@ -491,7 +477,7 @@ fn show_output_group(ui: &mut egui::Ui, options: &mut GenerateOptions, sequence_
                     basename,
                     cols,
                     rows,
-                    type_label: &options.output_type_color,
+                    suffix: &options.output_suffix_color,
                     ext: "tga",
                 },
             );
@@ -501,7 +487,7 @@ fn show_output_group(ui: &mut egui::Ui, options: &mut GenerateOptions, sequence_
                     basename,
                     cols,
                     rows,
-                    type_label: &options.output_type_motion,
+                    suffix: &options.output_suffix_motion,
                     ext: "tga",
                 },
             );
@@ -511,7 +497,7 @@ fn show_output_group(ui: &mut egui::Ui, options: &mut GenerateOptions, sequence_
                     basename,
                     cols,
                     rows,
-                    type_label: &options.output_type_meta,
+                    suffix: &options.output_suffix_meta,
                     ext: "json",
                 },
             );
@@ -606,7 +592,7 @@ mod tests {
             basename: "test",
             cols,
             rows,
-            type_label: "",
+            suffix: "",
             ext: "tga",
         };
         let name = motionframe_engine::pipeline::output_naming::interpolate_name_format(
@@ -624,7 +610,7 @@ mod tests {
             basename: "test",
             cols,
             rows,
-            type_label: "_MV",
+            suffix: "_MV",
             ext: "tga",
         };
         let name = motionframe_engine::pipeline::output_naming::interpolate_name_format(

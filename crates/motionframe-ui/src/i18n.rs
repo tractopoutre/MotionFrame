@@ -42,8 +42,8 @@ pub enum Key {
     AtlasHeading,
     AtlasResolution,
     AtlasResolutionHover,
-    TilesPerRow,
-    TilesPerColumn,
+    Columns,
+    Rows,
     LockBadgeAuto,
     LockBadgeManual,
     TilePixelWidth,
@@ -155,12 +155,12 @@ pub enum Key {
     OutputFormatHover,
     OutputBaseName,
     OutputBaseNameHover,
-    OutputTypeColor,
-    OutputTypeColorHover,
-    OutputTypeMotion,
-    OutputTypeMotionHover,
-    OutputTypeMeta,
-    OutputTypeMetaHover,
+    ColorSuffix,
+    ColorSuffixHover,
+    MotionSuffix,
+    MotionSuffixHover,
+    MetaSuffix,
+    MetaSuffixHover,
     OutputPreview,
     OutputPreviewEmpty,
     // Sidebar — Frame range
@@ -198,8 +198,8 @@ pub const fn t(lang: Lang, key: Key) -> &'static str {
         (Lang::En, Key::AtlasResolutionHover) => {
             "Target total atlas pixel dimension. Tile size is auto-computed from this and the input aspect ratio."
         }
-        (Lang::En, Key::TilesPerRow) => "Tiles per row:",
-        (Lang::En, Key::TilesPerColumn) => "Tiles per column:",
+        (Lang::En, Key::Columns) => "Columns:",
+        (Lang::En, Key::Rows) => "Rows:",
         (Lang::En, Key::LockBadgeAuto) => "(auto)",
         (Lang::En, Key::LockBadgeManual) => "(manual)",
         (Lang::En, Key::TilePixelWidth) => "Tile pixel width:",
@@ -348,23 +348,23 @@ pub const fn t(lang: Lang, key: Key) -> &'static str {
         (Lang::En, Key::OutputHeading) => "Output",
         (Lang::En, Key::OutputFormat) => "Format",
         (Lang::En, Key::OutputFormatHover) => {
-            "Use [basename], [cols], [rows], [type], [ext] tokens"
+            "Use [basename], [cols], [rows], [suffix], [ext] tokens"
         }
         (Lang::En, Key::OutputBaseName) => "Base name",
         (Lang::En, Key::OutputBaseNameHover) => {
             "Override the [basename] token (empty = auto-detect)"
         }
-        (Lang::En, Key::OutputTypeColor) => "Color label",
-        (Lang::En, Key::OutputTypeColorHover) => {
-            "What [type] resolves to in the color atlas filename"
+        (Lang::En, Key::ColorSuffix) => "Color suffix",
+        (Lang::En, Key::ColorSuffixHover) => {
+            "What [suffix] resolves to in the color atlas filename"
         }
-        (Lang::En, Key::OutputTypeMotion) => "Motion label",
-        (Lang::En, Key::OutputTypeMotionHover) => {
-            "What [type] resolves to in the motion atlas filename"
+        (Lang::En, Key::MotionSuffix) => "Motion suffix",
+        (Lang::En, Key::MotionSuffixHover) => {
+            "What [suffix] resolves to in the motion atlas filename"
         }
-        (Lang::En, Key::OutputTypeMeta) => "Meta label",
-        (Lang::En, Key::OutputTypeMetaHover) => {
-            "What [type] resolves to in the metadata filename"
+        (Lang::En, Key::MetaSuffix) => "Meta suffix",
+        (Lang::En, Key::MetaSuffixHover) => {
+            "What [suffix] resolves to in the metadata filename"
         }
         (Lang::En, Key::OutputPreview) => "Preview",
         (Lang::En, Key::OutputPreviewEmpty) => "Using default format",
@@ -393,8 +393,8 @@ pub const fn t(lang: Lang, key: Key) -> &'static str {
         (Lang::Ja, Key::AtlasResolutionHover) => {
             "目標アトラス全体のピクセル寸法。タイルサイズはこれと入力アスペクト比から自動計算されます。"
         }
-        (Lang::Ja, Key::TilesPerRow) => "タイル数(横):",
-        (Lang::Ja, Key::TilesPerColumn) => "タイル数(縦):",
+        (Lang::Ja, Key::Columns) => "列:",
+        (Lang::Ja, Key::Rows) => "行:",
         (Lang::Ja, Key::LockBadgeAuto) => "(自動)",
         (Lang::Ja, Key::LockBadgeManual) => "(手動)",
         (Lang::Ja, Key::TilePixelWidth) => "タイルのピクセル幅:",
@@ -546,23 +546,23 @@ pub const fn t(lang: Lang, key: Key) -> &'static str {
         (Lang::Ja, Key::OutputHeading) => "出力",
         (Lang::Ja, Key::OutputFormat) => "フォーマット",
         (Lang::Ja, Key::OutputFormatHover) => {
-            "[basename], [cols], [rows], [type], [ext] トークンを使用"
+            "[basename], [cols], [rows], [suffix], [ext] トークンを使用"
         }
         (Lang::Ja, Key::OutputBaseName) => "ベース名",
         (Lang::Ja, Key::OutputBaseNameHover) => {
             "[basename] トークンの上書き（空=自動検出）"
         }
-        (Lang::Ja, Key::OutputTypeColor) => "カラーラベル",
-        (Lang::Ja, Key::OutputTypeColorHover) => {
-            "カラーアトラスファイル名の [type] 値"
+        (Lang::Ja, Key::ColorSuffix) => "カラーサフィックス",
+        (Lang::Ja, Key::ColorSuffixHover) => {
+            "カラーアトラスファイル名の [suffix] 値"
         }
-        (Lang::Ja, Key::OutputTypeMotion) => "モーションラベル",
-        (Lang::Ja, Key::OutputTypeMotionHover) => {
-            "モーションアトラスファイル名の [type] 値"
+        (Lang::Ja, Key::MotionSuffix) => "モーションサフィックス",
+        (Lang::Ja, Key::MotionSuffixHover) => {
+            "モーションアトラスファイル名の [suffix] 値"
         }
-        (Lang::Ja, Key::OutputTypeMeta) => "メタラベル",
-        (Lang::Ja, Key::OutputTypeMetaHover) => {
-            "メタデータファイル名の [type] 値"
+        (Lang::Ja, Key::MetaSuffix) => "メタサフィックス",
+        (Lang::Ja, Key::MetaSuffixHover) => {
+            "メタデータファイル名の [suffix] 値"
         }
         (Lang::Ja, Key::OutputPreview) => "プレビュー",
         (Lang::Ja, Key::OutputPreviewEmpty) => "デフォルトフォーマットを使用中",
@@ -625,8 +625,8 @@ mod tests {
         Key::AtlasHeading,
         Key::AtlasResolution,
         Key::AtlasResolutionHover,
-        Key::TilesPerRow,
-        Key::TilesPerColumn,
+        Key::Columns,
+        Key::Rows,
         Key::LockBadgeAuto,
         Key::LockBadgeManual,
         Key::TilePixelWidth,
@@ -718,12 +718,12 @@ mod tests {
         Key::OutputFormatHover,
         Key::OutputBaseName,
         Key::OutputBaseNameHover,
-        Key::OutputTypeColor,
-        Key::OutputTypeColorHover,
-        Key::OutputTypeMotion,
-        Key::OutputTypeMotionHover,
-        Key::OutputTypeMeta,
-        Key::OutputTypeMetaHover,
+        Key::ColorSuffix,
+        Key::ColorSuffixHover,
+        Key::MotionSuffix,
+        Key::MotionSuffixHover,
+        Key::MetaSuffix,
+        Key::MetaSuffixHover,
         Key::OutputPreview,
         Key::OutputPreviewEmpty,
         Key::FrameRangeHeading,
@@ -745,8 +745,8 @@ mod tests {
             |             Key::AtlasHeading
             | Key::AtlasResolution
             | Key::AtlasResolutionHover
-            | Key::TilesPerRow
-            | Key::TilesPerColumn
+            | Key::Columns
+            | Key::Rows
             | Key::LockBadgeAuto
             | Key::LockBadgeManual
             | Key::TilePixelWidth
@@ -838,12 +838,12 @@ mod tests {
             | Key::OutputFormatHover
             | Key::OutputBaseName
             | Key::OutputBaseNameHover
-            | Key::OutputTypeColor
-            | Key::OutputTypeColorHover
-            | Key::OutputTypeMotion
-            | Key::OutputTypeMotionHover
-            | Key::OutputTypeMeta
-            | Key::OutputTypeMetaHover
+            | Key::ColorSuffix
+            | Key::ColorSuffixHover
+            | Key::MotionSuffix
+            | Key::MotionSuffixHover
+            | Key::MetaSuffix
+            | Key::MetaSuffixHover
             | Key::OutputPreview
             | Key::OutputPreviewEmpty
             | Key::FrameRangeHeading

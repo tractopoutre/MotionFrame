@@ -15,11 +15,11 @@ pub struct NameTokens<'a> {
     pub basename: &'a str,
     pub cols: u32,
     pub rows: u32,
-    pub type_label: &'a str,
+    pub suffix: &'a str,
     pub ext: &'a str,
 }
 
-static DEFAULT_FORMAT: &str = "[basename]_[cols]x[rows][type].[ext]";
+static DEFAULT_FORMAT: &str = "[basename]_[cols]x[rows][suffix].[ext]";
 
 /// Interpolate a format string with the given token values.
 ///
@@ -38,7 +38,7 @@ pub fn interpolate_name_format(format: &str, tokens: &NameTokens<'_>) -> String 
                 "basename" => result.push_str(tokens.basename),
                 "cols" => result.push_str(&tokens.cols.to_string()),
                 "rows" => result.push_str(&tokens.rows.to_string()),
-                "type" => result.push_str(tokens.type_label),
+                "suffix" => result.push_str(tokens.suffix),
                 "ext" => result.push_str(tokens.ext),
                 _ => {
                     result.push('[');
@@ -67,17 +67,17 @@ mod tests {
             basename: "explosion".into(),
             rows: 4,
             cols: 8,
-            type_label: "_MV",
+            suffix: "_MV",
             ext: "tga",
         };
-        let result = interpolate_name_format("[basename]_[cols]x[rows][type].[ext]", &tokens);
+        let result = interpolate_name_format("[basename]_[cols]x[rows][suffix].[ext]", &tokens);
         assert_eq!(result, "explosion_8x4_MV.tga");
     }
 
     #[test]
     fn unknown_tokens_left_verbatim() {
         let tokens = NameTokens {
-            basename: "x".into(), rows: 1, cols: 1, type_label: "", ext: "tga",
+            basename: "x".into(), rows: 1, cols: 1, suffix: "", ext: "tga",
         };
         let result = interpolate_name_format("[basename]_[foo].[ext]", &tokens);
         assert_eq!(result, "x_[foo].tga");
@@ -86,25 +86,25 @@ mod tests {
     #[test]
     fn empty_format_falls_back_to_default() {
         let tokens = NameTokens {
-            basename: "x".into(), rows: 3, cols: 4, type_label: "_meta", ext: "json",
+            basename: "x".into(), rows: 3, cols: 4, suffix: "_meta", ext: "json",
         };
         let result = interpolate_name_format("", &tokens);
         assert_eq!(result, "x_4x3_meta.json");
     }
 
     #[test]
-    fn empty_type_label_no_extra_separator() {
+    fn empty_suffix_no_extra_separator() {
         let tokens = NameTokens {
-            basename: "x".into(), rows: 2, cols: 2, type_label: "", ext: "tga",
+            basename: "x".into(), rows: 2, cols: 2, suffix: "", ext: "tga",
         };
-        let result = interpolate_name_format("[basename]_[cols]x[rows][type].[ext]", &tokens);
+        let result = interpolate_name_format("[basename]_[cols]x[rows][suffix].[ext]", &tokens);
         assert_eq!(result, "x_2x2.tga");
     }
 
     #[test]
     fn custom_basename_overrides() {
         let tokens = NameTokens {
-            basename: "my_custom_name".into(), rows: 1, cols: 1, type_label: "", ext: "tga",
+            basename: "my_custom_name".into(), rows: 1, cols: 1, suffix: "", ext: "tga",
         };
         let result = interpolate_name_format("[basename].[ext]", &tokens);
         assert_eq!(result, "my_custom_name.tga");

@@ -157,10 +157,10 @@ pub fn resolve_output_paths(
         &opts.output_name_basename
     };
     let (cols, rows) = opts.atlas_dims;
-    let type_label = match file_type {
-        OutputFileType::Color => &opts.output_type_color,
-        OutputFileType::Motion => &opts.output_type_motion,
-        OutputFileType::Meta => &opts.output_type_meta,
+    let suffix = match file_type {
+        OutputFileType::Color => &opts.output_suffix_color,
+        OutputFileType::Motion => &opts.output_suffix_motion,
+        OutputFileType::Meta => &opts.output_suffix_meta,
     };
     let ext = match file_type {
         OutputFileType::Color | OutputFileType::Motion => "tga",
@@ -171,7 +171,7 @@ pub fn resolve_output_paths(
         basename,
         cols,
         rows,
-        type_label,
+        suffix,
         ext,
     };
     let filename = interpolate_name_format(&opts.output_name_format, &tokens);
@@ -198,10 +198,10 @@ mod tests {
     #[test]
     fn resolve_output_paths_color_tga() {
         let opts = GenerateOptions {
-            output_name_format: "[basename]_[cols]x[rows][type].[ext]".into(),
-            output_type_color: "".into(),
-            output_type_motion: "_MV".into(),
-            output_type_meta: "_meta".into(),
+            output_name_format: "[basename]_[cols]x[rows][suffix].[ext]".into(),
+            output_suffix_color: "".into(),
+            output_suffix_motion: "_MV".into(),
+            output_suffix_meta: "_meta".into(),
             atlas_dims: (4, 3),
             ..Default::default()
         };
@@ -213,10 +213,10 @@ mod tests {
     #[test]
     fn resolve_output_paths_motion_tga() {
         let opts = GenerateOptions {
-            output_name_format: "[basename]_[cols]x[rows][type].[ext]".into(),
-            output_type_color: "".into(),
-            output_type_motion: "_MV".into(),
-            output_type_meta: "_meta".into(),
+            output_name_format: "[basename]_[cols]x[rows][suffix].[ext]".into(),
+            output_suffix_color: "".into(),
+            output_suffix_motion: "_MV".into(),
+            output_suffix_meta: "_meta".into(),
             atlas_dims: (4, 3),
             ..Default::default()
         };

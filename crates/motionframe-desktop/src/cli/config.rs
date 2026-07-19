@@ -85,9 +85,9 @@ pub struct CliConfig {
     pub progress: Option<ProgressMode>,
     pub output_name_format: Option<String>,
     pub output_name_basename: Option<String>,
-    pub output_type_color: Option<String>,
-    pub output_type_motion: Option<String>,
-    pub output_type_meta: Option<String>,
+    pub output_suffix_color: Option<String>,
+    pub output_suffix_motion: Option<String>,
+    pub output_suffix_meta: Option<String>,
     pub start_frame: Option<u32>,
     pub end_frame: Option<u32>,
 }
@@ -134,9 +134,9 @@ impl CliConfig {
         self.trim_tail = args.trim_tail().or(self.trim_tail);
         self.output_name_format = args.output_name_format.clone().or(self.output_name_format);
         self.output_name_basename = args.output_name_basename.clone().or(self.output_name_basename);
-        self.output_type_color = args.output_type_color.clone().or(self.output_type_color);
-        self.output_type_motion = args.output_type_motion.clone().or(self.output_type_motion);
-        self.output_type_meta = args.output_type_meta.clone().or(self.output_type_meta);
+        self.output_suffix_color = args.output_suffix_color.clone().or(self.output_suffix_color);
+        self.output_suffix_motion = args.output_suffix_motion.clone().or(self.output_suffix_motion);
+        self.output_suffix_meta = args.output_suffix_meta.clone().or(self.output_suffix_meta);
         self.start_frame = args.start_frame.or(self.start_frame);
         self.end_frame = args.end_frame.or(self.end_frame);
         self.progress = if args.quiet {
@@ -188,9 +188,9 @@ mod tests {
             no_trim_tail: false,
             output_name_format: None,
             output_name_basename: None,
-            output_type_color: None,
-            output_type_motion: None,
-            output_type_meta: None,
+            output_suffix_color: None,
+            output_suffix_motion: None,
+            output_suffix_meta: None,
             start_frame: None,
             end_frame: None,
         }
