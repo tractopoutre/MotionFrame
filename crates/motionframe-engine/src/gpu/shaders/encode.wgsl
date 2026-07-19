@@ -5,12 +5,12 @@
 @compute @workgroup_size(16, 16, 1)
 fn main(@builtin(global_invocation_id) id: vec3u) {
     let dims = textureDimensions(in_tex);
-    let w = dims.x;
-    let h = dims.y;
-    let x = min(id.x, w - 1);
-    let y = min(id.y, h - 1);
+    let w = i32(dims.x);
+    let h = i32(dims.y);
+    let x = min(i32(id.x), w - 1);
+    let y = min(i32(id.y), h - 1);
 
-    let flow = textureLoad(in_tex, vec2i(x, y), 0);
+    let flow = textureLoad(in_tex, vec2(x, y), 0);
     let strength = max_strength.x;
 
     var r: f32;
@@ -23,5 +23,5 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         g = clamp(flow.y / strength * 0.5 + 0.5, 0.0, 1.0);
     }
 
-    textureStore(out_tex, vec2i(x, y), vec4(r, g, 0.0, 0.0));
+    textureStore(out_tex, vec2(x, y), vec4(r, g, 0.0, 0.0));
 }

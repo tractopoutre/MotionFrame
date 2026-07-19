@@ -5,20 +5,17 @@
 fn main(@builtin(global_invocation_id) id: vec3u) {
     let in_dims = textureDimensions(in_tex);
     let out_dims = textureDimensions(out_tex);
-    let ow = out_dims.x;
-    let oh = out_dims.y;
-    let x = min(id.x, ow - 1);
-    let y = min(id.y, oh - 1);
+    let ow = i32(out_dims.x);
+    let oh = i32(out_dims.y);
+    let sw = i32(in_dims.x);
+    let sh = i32(in_dims.y);
+    let x = min(i32(id.x), ow - 1);
+    let y = min(i32(id.y), oh - 1);
 
-    let sx = i32(x / 2u);
-    let sy = i32(y / 2u);
-    let sw = in_dims.x;
-    let sh = in_dims.y;
-    let sx_clamped = min(sx, sw - 1);
-    let sy_clamped = min(sy, sh - 1);
+    let sx = min(x / 2, sw - 1);
+    let sy = min(y / 2, sh - 1);
 
-    let flow = textureLoad(in_tex, vec2i(sx_clamped, sy_clamped), 0);
+    let flow = textureLoad(in_tex, vec2(sx, sy), 0);
 
-    // Scale flow by 2.0 for the larger resolution
-    textureStore(out_tex, vec2i(x, y), vec4(flow.x * 2.0, flow.y * 2.0, 0.0, 0.0));
+    textureStore(out_tex, vec2(x, y), vec4(flow.x * 2.0, flow.y * 2.0, 0.0, 0.0));
 }

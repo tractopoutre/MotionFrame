@@ -26,7 +26,7 @@ fn hconv_row(tex: texture_2d<f32>, x: i32, y: i32, iw: i32) -> vec3f {
     var sg = 0.0; var sxg = 0.0; var sxxg = 0.0;
     for (var k = 0i; k < 5; k++) {
         let sx = clamp(x + k - 2, 0, iw - 1);
-        let v = textureLoad(tex, vec2i(sx, y), 0).r;
+        let v = textureLoad(tex, vec2(sx, y), 0).r;
         sg += v * G[k];
         sxg += v * XG[k];
         sxxg += v * XXG[k];
@@ -65,6 +65,6 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     let r2 = b3 * IG11;
     let r3 = b2 * IG11;
 
-    textureStore(out_tex, vec2i(ox * 2, oy), vec4(r4, r6, r5, r2));
-    textureStore(out_tex, vec2i(ox * 2 + 1, oy), vec4(r3, 0.0, 0.0, 0.0));
+    textureStore(out_tex, vec2(ox * 2, oy), vec4(r4, r6, r5, r2));
+    textureStore(out_tex, vec2(ox * 2 + 1, oy), vec4(r3, 0.0, 0.0, 0.0));
 }

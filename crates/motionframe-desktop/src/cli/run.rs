@@ -29,18 +29,22 @@ pub fn run_convert(mut job: ConvertJob) -> Result<(), CliError> {
     let cancel_fn = || false;
     let result: EncodeResult;
 
-    #[cfg(feature = "preview")]
-    {
-        let gpu = motionframe_engine::gpu::GpuPipeline::try_init();
-        if let Some(gpu) = gpu.as_ref() {
-            result = run::run_pipeline_with_gpu(&source, &job.options, &progress_fn, &cancel_fn, Some(gpu))?;
-        } else {
-            result = run::run_pipeline(&source, &job.options, &progress_fn, &cancel_fn)?;
+    // Attempt GPU-accelerated pipeline; fall back to CPU on failure.
+    let gpu = motionframe_engine::gpu::GpuPipeline::try_init();
+    if let Some(gpu) = gpu.as_ref() {
+        eprintln!("[gpu] using GPU pipeline (RTX 4090 or equivalent)");
+        match run::run_pipeline_with_gpu(&source, &job.options, &progress_fn, &cancel_fn, Some(gpu)) {
+            Ok(r) => {
+                result = r;
+                eprintln!("[gpu] GPU pipeline succeeded");
+            }
+            Err(e) => {
+                eprintln!("[gpu] GPU pipeline failed: {e}; falling back to CPU");
+                result = run::run_pipeline(&source, &job.options, &progress_fn, &cancel_fn)?;
+            }
         }
-    }
-
-    #[cfg(not(feature = "preview"))]
-    {
+    } else {
+        eprintln!("[gpu] no GPU device available, using CPU pipeline");
         result = run::run_pipeline(&source, &job.options, &progress_fn, &cancel_fn)?;
     }
 

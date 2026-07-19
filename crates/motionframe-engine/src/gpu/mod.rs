@@ -57,7 +57,7 @@ impl GpuPipeline {
                     binding: 0,
                     visibility: ShaderStages::COMPUTE,
                     ty: BindingType::Texture {
-                        sample_type: TextureSampleType::Float { filterable: true },
+                        sample_type: TextureSampleType::Float { filterable: false },
                         view_dimension: TextureViewDimension::D2,
                         multisampled: false,
                     },
@@ -84,7 +84,7 @@ impl GpuPipeline {
                     binding: 0,
                     visibility: ShaderStages::COMPUTE,
                     ty: BindingType::Texture {
-                        sample_type: TextureSampleType::Float { filterable: true },
+                        sample_type: TextureSampleType::Float { filterable: false },
                         view_dimension: TextureViewDimension::D2,
                         multisampled: false,
                     },
@@ -111,7 +111,7 @@ impl GpuPipeline {
                     binding: 0,
                     visibility: ShaderStages::COMPUTE,
                     ty: BindingType::Texture {
-                        sample_type: TextureSampleType::Float { filterable: true },
+                        sample_type: TextureSampleType::Float { filterable: false },
                         view_dimension: TextureViewDimension::D2,
                         multisampled: false,
                     },
@@ -138,7 +138,7 @@ impl GpuPipeline {
                     binding: 0,
                     visibility: ShaderStages::COMPUTE,
                     ty: BindingType::Texture {
-                        sample_type: TextureSampleType::Float { filterable: true },
+                        sample_type: TextureSampleType::Float { filterable: false },
                         view_dimension: TextureViewDimension::D2,
                         multisampled: false,
                     },
@@ -148,7 +148,7 @@ impl GpuPipeline {
                     binding: 1,
                     visibility: ShaderStages::COMPUTE,
                     ty: BindingType::Texture {
-                        sample_type: TextureSampleType::Float { filterable: true },
+                        sample_type: TextureSampleType::Float { filterable: false },
                         view_dimension: TextureViewDimension::D2,
                         multisampled: false,
                     },
@@ -158,7 +158,7 @@ impl GpuPipeline {
                     binding: 2,
                     visibility: ShaderStages::COMPUTE,
                     ty: BindingType::Texture {
-                        sample_type: TextureSampleType::Float { filterable: true },
+                        sample_type: TextureSampleType::Float { filterable: false },
                         view_dimension: TextureViewDimension::D2,
                         multisampled: false,
                     },
@@ -195,7 +195,7 @@ impl GpuPipeline {
                     binding: 0,
                     visibility: ShaderStages::COMPUTE,
                     ty: BindingType::Texture {
-                        sample_type: TextureSampleType::Float { filterable: true },
+                        sample_type: TextureSampleType::Float { filterable: false },
                         view_dimension: TextureViewDimension::D2,
                         multisampled: false,
                     },
@@ -614,7 +614,7 @@ impl GpuPipeline {
         let out = self.make_tex(
             w, h,
             TextureFormat::Rg32Float,
-            TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING,
+            TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_SRC,
             "flow",
         );
 
@@ -713,7 +713,7 @@ impl GpuPipeline {
     }
 
     fn readback_flow(&self, tex: &Texture, w: u32, h: u32) -> Flow {
-        let bpr = w * 8;
+        let bpr = ((w * 8) + 255) & !255;
         let staging = self.device.create_buffer(&BufferDescriptor {
             label: Some("readback"),
             size: (bpr * h) as u64,

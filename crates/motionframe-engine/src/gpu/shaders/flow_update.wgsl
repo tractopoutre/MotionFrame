@@ -24,20 +24,20 @@ struct Poly5 {
 }
 
 fn load_poly(tex: texture_2d<f32>, x: i32, y: i32) -> Poly5 {
-    let t0 = textureLoad(tex, vec2i(x * 2, y), 0);
-    let t1 = textureLoad(tex, vec2i(x * 2 + 1, y), 0);
+    let t0 = textureLoad(tex, vec2(x * 2, y), 0);
+    let t1 = textureLoad(tex, vec2(x * 2 + 1, y), 0);
     return Poly5(t0.x, t0.y, t0.z, t0.w, t1.x);
 }
 
-fn sample_poly_bilinear(tex: texture_2d<f32>, fx: f32, fy: f32, w: i32, h: i32) -> Poly5 {
-    let fx = clamp(fx, 0.0, f32(w - 1));
-    let fy = clamp(fy, 0.0, f32(h - 1));
-    let x0 = i32(floor(fx));
-    let y0 = i32(floor(fy));
+fn sample_poly_bilinear(tex: texture_2d<f32>, u: f32, v: f32, w: i32, h: i32) -> Poly5 {
+    let fu = clamp(u, 0.0, f32(w - 1));
+    let fv = clamp(v, 0.0, f32(h - 1));
+    let x0 = i32(floor(fu));
+    let y0 = i32(floor(fv));
     let x1 = min(x0 + 1, w - 1);
     let y1 = min(y0 + 1, h - 1);
-    let ax = fx - f32(x0);
-    let ay = fy - f32(y0);
+    let ax = fu - f32(x0);
+    let ay = fv - f32(y0);
 
     let w00 = (1.0 - ax) * (1.0 - ay);
     let w10 = ax * (1.0 - ay);
@@ -80,8 +80,8 @@ fn build_tensors(pa: Poly5, pb: Poly5, dx: f32, dy: f32) -> Tensors {
 @compute @workgroup_size(16, 16, 1)
 fn main(@builtin(global_invocation_id) id: vec3u) {
     let dims = textureDimensions(poly_a_tex);
-    let pw = dims.x / 2i;
-    let ph = dims.y;
+    let pw = i32(dims.x) / 2;
+    let ph = i32(dims.y);
     let x = min(i32(id.x), pw - 1);
     let y = min(i32(id.y), ph - 1);
     if (x < 0 || y < 0) {
@@ -90,7 +90,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
 
     // Read prior flow at this pixel
     let prior_dims = textureDimensions(prior_flow_tex);
-    let prior = textureLoad(prior_flow_tex, vec2i(min(x, prior_dims.x - 1), min(y, prior_dims.y - 1)), 0);
+    let prior = textureLoad(prior_flow_tex, vec2(min(x, i32(prior_dims.x) - 1), min(y, i32(prior_dims.y) - 1)), 0);
     let dx = prior.x;
     let dy = prior.y;
 
@@ -133,5 +133,5 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     let flow_x = (g22_s * h1_s - g12_s * h2_s) / det;
     let flow_y = (g11_s * h2_s - g12_s * h1_s) / det;
 
-    textureStore(out_tex, vec2i(x, y), vec4(flow_x * scale_factor, flow_y * scale_factor, 0.0, 0.0));
+    textureStore(out_tex, vec2(x, y), vec4(flow_x * scale_factor, flow_y * scale_factor, 0.0, 0.0));
 }
