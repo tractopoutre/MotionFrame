@@ -140,7 +140,7 @@ fn write_outputs(
     Ok(())
 }
 
-fn resolve_output_paths(
+pub fn resolve_output_paths(
     output_prefix: &Path,
     opts: &GenerateOptions,
     file_type: OutputFileType,

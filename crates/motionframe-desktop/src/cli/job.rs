@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use motionframe_engine::pipeline::atlas_layout::{pick_layout, DEFAULT_PADDING_BOUND};
 use motionframe_engine::pipeline::output_detents::{build_output_count_detents, DetentEntry};
 use motionframe_engine::pipeline::run::predict_resize_height;
+use motionframe_engine::pipeline::output_naming::OutputFileType;
 use motionframe_engine::pipeline::{GenerateOptions, Interpolation, MotionVectorEncoding};
 
 use crate::cli::config::{
@@ -201,7 +202,34 @@ impl ConvertJob {
             }
         }
 
-        // TODO: output path collision detection after resolve_output_paths is defined
+        // Check for output path collisions
+        let color_path = crate::cli::run::resolve_output_paths(
+            &self.output, &self.options, OutputFileType::Color,
+        );
+        let motion_path = crate::cli::run::resolve_output_paths(
+            &self.output, &self.options, OutputFileType::Motion,
+        );
+        let meta_path = crate::cli::run::resolve_output_paths(
+            &self.output, &self.options, OutputFileType::Meta,
+        );
+        if color_path == motion_path {
+            return Err(CliError::Argument(format!(
+                "output paths for color and motion atlases collide: {}",
+                color_path.display()
+            )));
+        }
+        if color_path == meta_path {
+            return Err(CliError::Argument(format!(
+                "output paths for color and meta collide: {}",
+                color_path.display()
+            )));
+        }
+        if motion_path == meta_path {
+            return Err(CliError::Argument(format!(
+                "output paths for motion and meta collide: {}",
+                motion_path.display()
+            )));
+        }
 
         Ok(())
     }
