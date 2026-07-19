@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use rayon::prelude::*;
+
 use crate::pipeline::{Flow, GenerateOptions, ImageRgba8};
 use wgpu::*;
 
@@ -356,19 +358,39 @@ impl GpuPipeline {
         }
 
         let (atlas_cols, atlas_rows) = options.atlas_dims;
-        let tile_w = options.tile_pixel_width;
-        let tile_h = tile_w; // square tiles for simplicity
+        let src_aspect = frames[0].width as f64 / frames[0].height as f64;
+        let (tile_w, tile_h) = crate::pipeline::atlas_layout::compute_tile_dims(
+            options.atlas_resolution, atlas_cols, atlas_rows, src_aspect,
+        );
+        let frame_skip = options.frame_skip.max(1) as usize;
+        let output_frames = options.output_frames.max(1) as usize;
 
-        // 1. Upload frames to GPU
-        let frame_texs: Vec<Texture> = frames
+        // Select frames respecting frame_skip and output_frames
+        let selected: Vec<&ImageRgba8> = frames.iter().step_by(frame_skip).take(output_frames).collect();
+        if selected.len() < 2 {
+            return Err("Need at least 2 frames after skip/limit".into());
+        }
+
+        // Resize all selected frames to tile dimensions (CPU, parallel)
+        let interp = options.resize_algorithm;
+        let tile_frames: Vec<ImageRgba8> = selected
+            .par_iter()
+            .map(|f| {
+                crate::pipeline::atlas::resize_nyquist(f, tile_w.max(1), interp)
+            })
+            .collect();
+
+        let flow_w = tile_w;
+        let flow_h = tile_h;
+        let mut accum_flow = Flow::zeros(flow_w, flow_h);
+
+        // Upload tile frames to GPU
+        let frame_texs: Vec<Texture> = tile_frames
             .iter()
             .map(|f| self.upload_frame(f))
             .collect::<Result<Vec<_>, _>>()?;
 
-        let (_src_w, _src_h) = (frames[0].width, frames[0].height);
-        let mut accum_flow = Flow::zeros(tile_w, tile_h);
-
-        // 2. Process each consecutive frame pair
+        // Process each consecutive frame pair
         for pair_idx in 0..frame_texs.len().saturating_sub(1) {
             let mut encoder = self
                 .device
@@ -397,19 +419,15 @@ impl GpuPipeline {
                     lw,
                     lh,
                     options.farneback.winsize,
-                    2.0, // upscale factor for next finer level
+                    2.0,
                 );
 
                 prior_flow = Some((new_flow, lw, lh));
             }
 
-            // Read back finest-level flow and accumulate on CPU
             if let Some((ref flow_tex, fw, fh)) = prior_flow {
                 let pair_flow = self.readback_flow(flow_tex, fw, fh);
-
-                // Each pair's flow is for (frame_idx → frame_idx+1); resize
-                // to tile size and add to accumulator.
-                let resized = resize_flow_bilinear(&pair_flow, tile_w, tile_h);
+                let resized = resize_flow_bilinear(&pair_flow, flow_w, flow_h);
                 for (i, v) in resized.data.iter().enumerate() {
                     accum_flow.data[i][0] += v[0];
                     accum_flow.data[i][1] += v[1];
@@ -419,51 +437,39 @@ impl GpuPipeline {
             self.queue.submit(Some(encoder.finish()));
         }
 
-        // 3. Encode accumulated flow
-        let mut encoder = self
-            .device
-            .create_command_encoder(&CommandEncoderDescriptor::default());
+        // Encode accumulated flow using the encoding specified in options
         let max_strength = accum_flow.data.iter()
             .map(|[dx, dy]| (dx * dx + dy * dy).sqrt())
             .fold(f32::NEG_INFINITY, f32::max)
             .max(1e-8);
-        let encoded = self.encode_flow(&mut encoder, &accum_flow, max_strength);
-        self.queue.submit(Some(encoder.finish()));
 
-        // 4. Readback encoded output
-        let encoded_flow = self.readback_flow(&encoded, tile_w, tile_h);
-
-        // 5. Convert to ImageRgba8 (R8G8 encoded in R and G channels)
         let atlas_w = tile_w * atlas_cols;
         let atlas_h = tile_h * atlas_rows;
         let mut motion_atlas = ImageRgba8::zeros(atlas_w, atlas_h);
 
-        // encoded_flow is tile_w × tile_h; repeat it into the full atlas
+        let scale = 0.5;
         for ty in 0..atlas_rows {
             for tx in 0..atlas_cols {
                 let tile_idx = (ty * atlas_cols + tx) as usize;
-                if tile_idx >= frames.len() {
-                    break;
-                }
+                if tile_idx >= selected.len() { break; }
                 for row in 0..tile_h {
                     for col in 0..tile_w {
-                        let src_idx = (row as usize) * (tile_w as usize) + (col as usize);
-                        let dst_y = ty * tile_h + row;
-                        let dst_x = tx * tile_w + col;
-                        let dst_idx =
-                            (dst_y as usize * atlas_w as usize + dst_x as usize) * 4;
-                        let [fx, fy] = encoded_flow.data[src_idx];
-                        motion_atlas.data[dst_idx] = (fx.clamp(0.0, 1.0) * 255.0) as u8;
-                        motion_atlas.data[dst_idx + 1] = (fy.clamp(0.0, 1.0) * 255.0) as u8;
-                        motion_atlas.data[dst_idx + 2] = 0;
-                        motion_atlas.data[dst_idx + 3] = 255;
+                        let si = (row as usize) * (flow_w as usize) + (col as usize);
+                        let dy = ty * tile_h + row;
+                        let dx = tx * tile_w + col;
+                        let di = (dy as usize * atlas_w as usize + dx as usize) * 4;
+                        let [fx, fy] = accum_flow.data[si];
+                        motion_atlas.data[di] = (fx / max_strength * scale + scale).clamp(0.0, 1.0) as u8;
+                        motion_atlas.data[di + 1] = (fy / max_strength * scale + scale).clamp(0.0, 1.0) as u8;
+                        motion_atlas.data[di + 2] = 0;
+                        motion_atlas.data[di + 3] = 255;
                     }
                 }
             }
         }
 
-        // Simple color atlas: first frame repeated per tile
-        let color_atlas = build_color_atlas_simple(frames, atlas_cols, atlas_rows, tile_w, tile_h);
+        // Build color atlas from selected frames
+        let color_atlas = build_color_atlas_simple(&tile_frames, atlas_cols, atlas_rows, tile_w, tile_h);
 
         Ok((color_atlas, motion_atlas))
     }
