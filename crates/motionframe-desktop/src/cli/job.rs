@@ -119,6 +119,19 @@ impl ConvertJob {
             Some(MotionVectorEncodingArg::Staggered) | None => MotionVectorEncoding::R8G8Remap01,
             Some(MotionVectorEncodingArg::Normal) => MotionVectorEncoding::SidefxLabsR8G8,
         };
+        options.output_name_format = cfg.output_name_format.unwrap_or(options.output_name_format);
+        options.output_name_basename = cfg.output_name_basename.unwrap_or(options.output_name_basename);
+        options.output_type_color = cfg.output_type_color.unwrap_or(options.output_type_color);
+        options.output_type_motion = cfg.output_type_motion.unwrap_or(options.output_type_motion);
+        options.output_type_meta = cfg.output_type_meta.unwrap_or(options.output_type_meta);
+        options.start_frame = cfg.start_frame.unwrap_or(options.start_frame);
+        options.end_frame = cfg.end_frame.unwrap_or(options.end_frame);
+
+        if options.end_frame != 0 && options.start_frame >= options.end_frame {
+            return Err(CliError::Argument(
+                "--start must be less than --end".into(),
+            ));
+        }
 
         Ok(Self {
             input,
@@ -187,6 +200,8 @@ impl ConvertJob {
                 self.options.atlas_dims = (cols, rows);
             }
         }
+
+        // TODO: output path collision detection after resolve_output_paths is defined
 
         Ok(())
     }
@@ -271,4 +286,38 @@ fn nearby_counts(detents: &[DetentEntry], requested: u32) -> String {
         .map(|count| count.to_string())
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn start_greater_than_end_returns_error() {
+        let cfg = CliConfig {
+            start_frame: Some(10),
+            end_frame: Some(5),
+            input: Some(".".into()),
+            output: Some("out".into()),
+            ..Default::default()
+        };
+        let result = ConvertJob::from_config(cfg);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("start"));
+    }
+
+    #[test]
+    fn valid_start_end_ok() {
+        let cfg = CliConfig {
+            start_frame: Some(2),
+            end_frame: Some(8),
+            input: Some(".".into()),
+            output: Some("out".into()),
+            ..Default::default()
+        };
+        if let Ok(job) = ConvertJob::from_config(cfg) {
+            assert_eq!(job.options.start_frame, 2);
+            assert_eq!(job.options.end_frame, 8);
+        }
+    }
 }
