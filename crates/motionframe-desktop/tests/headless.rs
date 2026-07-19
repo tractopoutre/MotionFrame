@@ -32,9 +32,9 @@ fn headless_flag_is_rejected() {
 #[test]
 fn convert_explosion00_produces_outputs() {
     let out_prefix = std::env::temp_dir().join("motionframe_convert_test");
-    let color = out_prefix.with_file_name("motionframe_convert_test_color_atlas.tga");
-    let motion = out_prefix.with_file_name("motionframe_convert_test_motion_atlas.tga");
-    let meta = out_prefix.with_file_name("motionframe_convert_test_meta.json");
+    let color = out_prefix.with_file_name("motionframe_convert_test_10x10.tga");
+    let motion = out_prefix.with_file_name("motionframe_convert_test_10x10_MV.tga");
+    let meta = out_prefix.with_file_name("motionframe_convert_test_10x10_meta.json");
     let _ = std::fs::remove_file(&color);
     let _ = std::fs::remove_file(&motion);
     let _ = std::fs::remove_file(&meta);
@@ -79,7 +79,7 @@ fn convert_explosion00_produces_outputs() {
 #[test]
 fn convert_refuses_existing_outputs_without_overwrite() {
     let out_prefix = std::env::temp_dir().join("motionframe_convert_existing");
-    let color = out_prefix.with_file_name("motionframe_convert_existing_color_atlas.tga");
+    let color = out_prefix.with_file_name("motionframe_convert_existing_10x10.tga");
     std::fs::write(&color, b"existing").expect("write existing output");
 
     let input_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -110,9 +110,9 @@ fn convert_config_with_cli_override_changes_metadata() {
     let dir = std::env::temp_dir();
     let config_path = dir.join("motionframe_convert_config.toml");
     let out_prefix = dir.join("motionframe_convert_config_out");
-    let color = out_prefix.with_file_name("motionframe_convert_config_out_color_atlas.tga");
-    let motion = out_prefix.with_file_name("motionframe_convert_config_out_motion_atlas.tga");
-    let meta = out_prefix.with_file_name("motionframe_convert_config_out_meta.json");
+    let color = out_prefix.with_file_name("motionframe_convert_config_out_2x1.tga");
+    let motion = out_prefix.with_file_name("motionframe_convert_config_out_2x1_MV.tga");
+    let meta = out_prefix.with_file_name("motionframe_convert_config_out_2x1_meta.json");
     let _ = std::fs::remove_file(&color);
     let _ = std::fs::remove_file(&motion);
     let _ = std::fs::remove_file(&meta);
@@ -124,17 +124,17 @@ fn convert_config_with_cli_override_changes_metadata() {
         .join("fixtures")
         .join("explosion00");
 
+    let input_str = input_dir.to_string_lossy().replace('\\', "/");
     std::fs::write(
         &config_path,
         format!(
             r#"
-input = "{}"
+input = "{input_str}"
 output = "unused/from-config"
 output_count = 4
 layout = "auto"
 progress = "none"
 "#,
-            input_dir.display()
         ),
     )
     .expect("write config");

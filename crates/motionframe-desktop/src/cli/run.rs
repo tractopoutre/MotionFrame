@@ -4,8 +4,9 @@ use motionframe_engine::io::metadata::{self, AtlasMetadata};
 use motionframe_engine::io::sequence;
 use motionframe_engine::io::tga::{load_rgba, save_tga};
 use motionframe_engine::io::{slice_atlas, InMemoryFrames};
+use motionframe_engine::pipeline::output_naming::{interpolate_name_format, NameTokens, OutputFileType};
 use motionframe_engine::pipeline::run::{self, EncodeResult};
-use motionframe_engine::pipeline::{ImageRgba8, Progress};
+use motionframe_engine::pipeline::{GenerateOptions, ImageRgba8, Progress};
 
 use crate::cli::config::ProgressMode;
 use crate::cli::job::{ConvertJob, SourceKind};
@@ -28,7 +29,7 @@ pub fn run_convert(mut job: ConvertJob) -> Result<(), CliError> {
     let cancel_fn = || false;
     let result: EncodeResult = run::run_pipeline(&source, &job.options, &progress_fn, &cancel_fn)?;
 
-    write_outputs(&job.output, &result)?;
+    write_outputs(&job.output, &result, &job.options)?;
     emit_progress(job.progress, "done");
     Ok(())
 }
@@ -62,8 +63,15 @@ fn load_frames(job: &ConvertJob) -> Result<(Vec<ImageRgba8>, u32), CliError> {
             for file in &files {
                 frames.push(load_rgba(file)?);
             }
+            let start = job.options.start_frame as usize;
+            let end = if job.options.end_frame == 0 {
+                frames.len()
+            } else {
+                job.options.end_frame as usize
+            };
+            let frames: Vec<ImageRgba8> = frames.drain(start..end).collect();
             let count = u32::try_from(frames.len())
-                .map_err(|_| CliError::Argument("input sequence has too many frames".into()))?;
+                .map_err(|_| CliError::Argument("sliced frame range has too many frames".into()))?;
             Ok((frames, count))
         }
         SourceKind::SingleAtlas => {
@@ -71,22 +79,31 @@ fn load_frames(job: &ConvertJob) -> Result<(Vec<ImageRgba8>, u32), CliError> {
             let (cols, rows) = job.options.input_atlas_dims.ok_or_else(|| {
                 CliError::Argument("single-file input requires input atlas dimensions".into())
             })?;
-            let frames = slice_atlas(&image, cols, rows)
+            let mut frames = slice_atlas(&image, cols, rows)
                 .map_err(|e| CliError::Pipeline(format!("atlas slice: {e}")))?;
+            let start = job.options.start_frame as usize;
+            let end = if job.options.end_frame == 0 {
+                frames.len()
+            } else {
+                job.options.end_frame as usize
+            };
+            let frames: Vec<ImageRgba8> = frames.drain(start..end).collect();
             let count = u32::try_from(frames.len())
-                .map_err(|_| CliError::Argument("input atlas has too many tiles".into()))?;
+                .map_err(|_| CliError::Argument("sliced frame range has too many frames".into()))?;
             Ok((frames, count))
         }
     }
 }
 
 fn ensure_outputs_writable(job: &ConvertJob) -> Result<(), CliError> {
-    let paths = output_paths(&job.output)?;
+    let color = resolve_output_paths(&job.output, &job.options, OutputFileType::Color);
+    let motion = resolve_output_paths(&job.output, &job.options, OutputFileType::Motion);
+    let meta = resolve_output_paths(&job.output, &job.options, OutputFileType::Meta);
     if let Some(parent) = job.output.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent)?;
     }
     if !job.overwrite {
-        for path in [&paths.color, &paths.motion, &paths.meta] {
+        for path in [&color, &motion, &meta] {
             if path.exists() {
                 return Err(CliError::Argument(format!(
                     "output already exists: {}; use --overwrite to replace",
@@ -98,11 +115,17 @@ fn ensure_outputs_writable(job: &ConvertJob) -> Result<(), CliError> {
     Ok(())
 }
 
-fn write_outputs(output_prefix: &Path, result: &EncodeResult) -> Result<(), CliError> {
-    let paths = output_paths(output_prefix)?;
-    save_tga(&paths.color, &result.color_atlas)?;
-    save_tga(&paths.motion, &result.motion_atlas)?;
-    let meta = AtlasMetadata {
+fn write_outputs(
+    output_prefix: &Path,
+    result: &EncodeResult,
+    opts: &GenerateOptions,
+) -> Result<(), CliError> {
+    let color = resolve_output_paths(output_prefix, opts, OutputFileType::Color);
+    let motion = resolve_output_paths(output_prefix, opts, OutputFileType::Motion);
+    let meta = resolve_output_paths(output_prefix, opts, OutputFileType::Meta);
+    save_tga(&color, &result.color_atlas)?;
+    save_tga(&motion, &result.motion_atlas)?;
+    let meta_obj = AtlasMetadata {
         strength: result.strength,
         total_frames: result.total_frames,
         atlas_width: result.atlas_width,
@@ -113,30 +136,46 @@ fn write_outputs(output_prefix: &Path, result: &EncodeResult) -> Result<(), CliE
         is_loop: result.is_loop,
         premultiplied_alpha: result.premultiplied_alpha,
     };
-    metadata::write(&paths.meta, &meta)?;
+    metadata::write(&meta, &meta_obj)?;
     Ok(())
 }
 
-struct OutputPaths {
-    color: PathBuf,
-    motion: PathBuf,
-    meta: PathBuf,
-}
+fn resolve_output_paths(
+    output_prefix: &Path,
+    opts: &GenerateOptions,
+    file_type: OutputFileType,
+) -> PathBuf {
+    let out_dir = output_prefix.parent().unwrap_or_else(|| Path::new("."));
+    let stem = output_prefix
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("output");
 
-fn output_paths(prefix: &Path) -> Result<OutputPaths, CliError> {
-    let out_dir = prefix.parent().unwrap_or_else(|| Path::new("."));
-    let stem = prefix.file_name().ok_or_else(|| {
-        CliError::Argument(format!(
-            "output prefix has no file name: {}",
-            prefix.display()
-        ))
-    })?;
-    let stem = stem.to_string_lossy();
-    Ok(OutputPaths {
-        color: out_dir.join(format!("{stem}_color_atlas.tga")),
-        motion: out_dir.join(format!("{stem}_motion_atlas.tga")),
-        meta: out_dir.join(format!("{stem}_meta.json")),
-    })
+    let basename = if opts.output_name_basename.is_empty() {
+        stem
+    } else {
+        &opts.output_name_basename
+    };
+    let (cols, rows) = opts.atlas_dims;
+    let type_label = match file_type {
+        OutputFileType::Color => &opts.output_type_color,
+        OutputFileType::Motion => &opts.output_type_motion,
+        OutputFileType::Meta => &opts.output_type_meta,
+    };
+    let ext = match file_type {
+        OutputFileType::Color | OutputFileType::Motion => "tga",
+        OutputFileType::Meta => "json",
+    };
+
+    let tokens = NameTokens {
+        basename,
+        cols,
+        rows,
+        type_label,
+        ext,
+    };
+    let filename = interpolate_name_format(&opts.output_name_format, &tokens);
+    out_dir.join(filename)
 }
 
 fn emit_progress(mode: ProgressMode, message: &str) {
@@ -148,5 +187,53 @@ fn emit_progress(mode: ProgressMode, message: &str) {
         ProgressMode::Auto | ProgressMode::Plain => {
             eprintln!("{message}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use motionframe_engine::pipeline::output_naming::OutputFileType;
+
+    #[test]
+    fn resolve_output_paths_color_tga() {
+        let opts = GenerateOptions {
+            output_name_format: "[basename]_[cols]x[rows][type].[ext]".into(),
+            output_type_color: "".into(),
+            output_type_motion: "_MV".into(),
+            output_type_meta: "_meta".into(),
+            atlas_dims: (4, 3),
+            ..Default::default()
+        };
+        let prefix = Path::new("out/test");
+        let path = resolve_output_paths(prefix, &opts, OutputFileType::Color);
+        assert_eq!(path, Path::new("out/test_4x3.tga"));
+    }
+
+    #[test]
+    fn resolve_output_paths_motion_tga() {
+        let opts = GenerateOptions {
+            output_name_format: "[basename]_[cols]x[rows][type].[ext]".into(),
+            output_type_color: "".into(),
+            output_type_motion: "_MV".into(),
+            output_type_meta: "_meta".into(),
+            atlas_dims: (4, 3),
+            ..Default::default()
+        };
+        let prefix = Path::new("out/test");
+        let path = resolve_output_paths(prefix, &opts, OutputFileType::Motion);
+        assert_eq!(path, Path::new("out/test_4x3_MV.tga"));
+    }
+
+    #[test]
+    fn resolve_output_paths_custom_basename() {
+        let opts = GenerateOptions {
+            output_name_format: "[basename]_custom.[ext]".into(),
+            output_name_basename: "my_seq".into(),
+            atlas_dims: (1, 1),
+            ..Default::default()
+        };
+        let path = resolve_output_paths(Path::new("out/x"), &opts, OutputFileType::Color);
+        assert_eq!(path, Path::new("out/my_seq_custom.tga"));
     }
 }
