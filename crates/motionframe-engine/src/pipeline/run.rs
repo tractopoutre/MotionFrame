@@ -157,47 +157,11 @@ pub fn run_pipeline_with_gpu(
     opts: &GenerateOptions,
     progress: &(dyn Fn(Progress) + Sync),
     cancel: &(dyn Fn() -> bool + Sync),
-    gpu: Option<&crate::gpu::GpuPipeline>,
+    _gpu: Option<&crate::gpu::GpuPipeline>,
 ) -> Result<EncodeResult, PipelineError> {
-    if let Some(gpu) = gpu {
-        let materialized: Vec<ImageRgba8> = (0..frames.len())
-            .map(|i| frames.get(i).map(|f| (*f).clone()))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| PipelineError::Other(format!("frame source: {e}")))?;
-        let premul_frames: Vec<ImageRgba8> = materialized
-            .par_iter()
-            .map(crate::io::tga::premultiply_alpha)
-            .collect();
-        if cancel() {
-            return Err(PipelineError::Cancelled);
-        }
-        match gpu.compute(&premul_frames, opts) {
-            Ok((color_atlas, motion_atlas, strength)) => {
-                let tile = opts.tile_pixel_width;
-                let (cols, rows) = opts.atlas_dims;
-                return Ok(EncodeResult {
-                    color_atlas,
-                    motion_atlas,
-                    strength,
-                    total_frames: cols * rows,
-                    atlas_width: cols * tile,
-                    atlas_height: rows * tile,
-                    columns: cols,
-                    rows,
-                    pack_mode: if opts.stagger_pack { PackMode::Staggered } else { PackMode::Normal },
-                    is_loop: opts.is_loop,
-                    premultiplied_alpha: opts.premultiplied_alpha,
-                    flows: Vec::new(),
-                });
-            }
-            Err(e) => {
-                progress(Progress::Stage {
-                    name: format!("GPU failed: {e}; falling back to CPU"),
-                    fraction: 0.0,
-                });
-            }
-        }
-    }
+    // GPU compute pipeline is experimental and currently disabled.
+    // The CPU pipeline is well-optimized (rayon + SIMD). GPU resize/premultiply
+    // will be added in a future release.
     run_pipeline_inner(frames, opts, progress, cancel)
 }
 
@@ -466,7 +430,7 @@ fn run_pipeline_inner(
 /// prevents opaque black/gray (e.g. smoke) from aliasing against transparent
 /// regions in Farneback's polynomial expansion.
 /// Base luma uses BT.601 fixed-point on the premultiplied RGB.
-fn rgba_to_gray_f32(img: &ImageRgba8) -> ImageF32 {
+pub fn rgba_to_gray_f32(img: &ImageRgba8) -> ImageF32 {
     let mut result = ImageF32::zeros(img.width, img.height);
     for (i, chunk) in img.data.chunks_exact(4).enumerate() {
         let r = u32::from(chunk[0]);

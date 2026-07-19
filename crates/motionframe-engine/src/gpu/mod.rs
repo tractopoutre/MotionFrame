@@ -402,27 +402,59 @@ impl GpuPipeline {
             let pyr1 = self.pyramid_all(&mut encoder, &gray1);
             let num_levels = pyr0.len();
 
+            // Coarse-to-fine: level 0 = coarsest (smallest), level N-1 = finest (largest).
             let mut prior_flow: Option<(Texture, u32, u32)> = None;
 
-            for li in 0..num_levels {
-                let level = num_levels - 1 - li;
+            for level in 0..num_levels {
                 let (_, lw, lh) = pyr0[level];
 
                 let pa = self.poly_expand(&mut encoder, &pyr0[level]);
                 let pb = self.poly_expand(&mut encoder, &pyr1[level]);
 
-                let new_flow = self.flow_update(
-                    &mut encoder,
-                    &pa,
-                    &pb,
-                    prior_flow.as_ref().map(|(t, _, _)| t),
-                    lw,
-                    lh,
-                    options.farneback.winsize,
-                    2.0,
-                );
+                // Upsample prior flow to current level size (or zero-init for coarsest)
+                // Build initial flow for this level (upsampled from coarser level, or zero)
+                let init_flow: Option<Texture> = if level == 0 {
+                    None
+                } else if prior_flow.is_none() {
+                    None
+                } else {
+                    let up = {
+                        let (ref prev_tex, ..) = prior_flow.as_ref().unwrap();
+                        let up = self.make_tex(lw, lh, TextureFormat::Rg32Float,
+                            TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_SRC,
+                            "up_flow");
+                        let in_view = Self::tex_view(prev_tex);
+                        let out_view = Self::tex_view(&up);
+                        let up_bg = self.device.create_bind_group(&BindGroupDescriptor {
+                            label: Some("bg_upsample"),
+                            layout: &self.bgl_tex_in_out_rg,
+                            entries: &[
+                                BindGroupEntry { binding: 0, resource: BindingResource::TextureView(&in_view) },
+                                BindGroupEntry { binding: 1, resource: BindingResource::TextureView(&out_view) },
+                            ],
+                        });
+                        self.dispatch_16(&mut encoder, &self.upsample, &up_bg, lw, lh);
+                        up
+                    };
+                    Some(up)
+                };
 
-                prior_flow = Some((new_flow, lw, lh));
+                // Run multiple flow update iterations at this level
+                let mut cur_flow = init_flow;
+                let num_iters = options.farneback.iterations.max(1);
+                for _iter in 0..num_iters {
+                    cur_flow = Some(self.flow_update(
+                        &mut encoder,
+                        &pa,
+                        &pb,
+                        cur_flow.as_ref(),
+                        lw,
+                        lh,
+                        options.farneback.winsize,
+                        2.0,
+                    ));
+                }
+                prior_flow = cur_flow.map(|f| (f, lw, lh));
             }
 
             if let Some((ref flow_tex, fw, fh)) = prior_flow {

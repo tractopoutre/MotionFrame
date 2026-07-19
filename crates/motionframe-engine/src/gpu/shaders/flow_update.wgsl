@@ -119,15 +119,14 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     }
 
     // Solve 2×2 system
-    let winsize = params.x;
     let scale_factor = params.y;
-    let scale = 1.0 / (winsize * winsize);
+    // Binomial kernel is already normalized (sum = 1.0), no additional scaling needed
 
-    let g11_s = t0 * scale;
-    let g12_s = t1 * scale;
-    let g22_s = t2 * scale;
-    let h1_s = t3 * scale;
-    let h2_s = t4 * scale;
+    let g11_s = t0;
+    let g12_s = t1;
+    let g22_s = t2;
+    let h1_s = t3;
+    let h2_s = t4;
 
     let det = g11_s * g22_s - g12_s * g12_s + 1e-3;
     let flow_x = (g22_s * h1_s - g12_s * h2_s) / det;
