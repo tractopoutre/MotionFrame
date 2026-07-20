@@ -39,6 +39,7 @@ pub struct GpuPipeline {
     flow_update: ComputePipeline,
     upsample: ComputePipeline,
     encode: ComputePipeline,
+    resize: ComputePipeline,
     accumulate: ComputePipeline,
     combine_bidir: ComputePipeline,
     // Bind group layouts
@@ -48,6 +49,7 @@ pub struct GpuPipeline {
     bgl_flow_update: BindGroupLayout,
     bgl_encode: BindGroupLayout,
     bgl_accum_combine: BindGroupLayout,
+    bgl_resize: BindGroupLayout,
     zero_prior: Texture,
 }
 
@@ -287,6 +289,43 @@ impl GpuPipeline {
             ],
         });
 
+        // 1 sampled RGBA8 texture + 1 RGBA8 storage (resize)
+        let bgl_resize = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("bgl_resize"),
+            entries: &[
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: false },
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::StorageTexture {
+                        access: StorageTextureAccess::WriteOnly,
+                        format: TextureFormat::Rgba8Unorm,
+                        view_dimension: TextureViewDimension::D2,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
         // 2 sampled RG32Float textures + 1 RG32Float storage (accumulate, combine)
         let bgl_accum_combine = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: Some("bgl_accum_combine"),
@@ -355,6 +394,11 @@ impl GpuPipeline {
             bind_group_layouts: &[Some(&bgl_accum_combine)],
             immediate_size: 0,
         });
+        let pl_resize = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("pl_resize"),
+            bind_group_layouts: &[Some(&bgl_resize)],
+            immediate_size: 0,
+        });
 
         // --- Shader modules ---
         let mod_grayscale = device.create_shader_module(ShaderModuleDescriptor {
@@ -381,6 +425,10 @@ impl GpuPipeline {
             label: Some("encode"),
             source: ShaderSource::Wgsl(include_str!("shaders/encode.wgsl").into()),
         });
+        let mod_resize = device.create_shader_module(ShaderModuleDescriptor {
+            label: Some("resize"),
+            source: ShaderSource::Wgsl(include_str!("shaders/resize.wgsl").into()),
+        });
         let mod_accum = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("accumulate"),
             source: ShaderSource::Wgsl(include_str!("shaders/accumulate.wgsl").into()),
@@ -397,6 +445,7 @@ impl GpuPipeline {
         let flow_update = Self::make_pipeline(&device, &pl_flow, &mod_flow, "flow_update");
         let upsample = Self::make_pipeline(&device, &pl_rg, &mod_upsample, "upsample");
         let encode = Self::make_pipeline(&device, &pl_encode, &mod_encode, "encode");
+        let resize = Self::make_pipeline(&device, &pl_resize, &mod_resize, "resize");
         let accumulate = Self::make_pipeline(&device, &pl_accum_combine, &mod_accum, "accumulate");
         let combine_bidir =
             Self::make_pipeline(&device, &pl_accum_combine, &mod_combine, "combine_bidir");
@@ -445,6 +494,7 @@ impl GpuPipeline {
             flow_update,
             upsample,
             encode,
+            resize,
             accumulate,
             combine_bidir,
             bgl_tex_in_out,
@@ -453,6 +503,7 @@ impl GpuPipeline {
             bgl_flow_update,
             bgl_encode,
             bgl_accum_combine,
+            bgl_resize,
             zero_prior,
         }
     }
@@ -633,30 +684,30 @@ impl GpuPipeline {
             src_aspect,
         );
 
-        let interp = options.resize_algorithm;
-        let tile_frames: Vec<ImageRgba8> = frames
-            .par_iter()
-            .map(|f| crate::pipeline::atlas::resize_nyquist(f, tile_w.max(1), interp))
-            .collect();
-
         let flow_w = tile_w;
         let flow_h = tile_h;
 
-        // Upload all frames as GPU textures upfront
-        let frame_texs: Vec<Texture> = tile_frames.iter().map(|f| self.upload_frame(f)).collect();
+        // Upload original frames as GPU textures, then resize on GPU
+        let orig_texs: Vec<Texture> = frames.iter().map(|f| self.upload_frame(f)).collect();
 
         // Respect analyze_skipped_frames: when false, only process first→last pair
-        let last_pair = frame_texs.len().saturating_sub(1);
+        let last_pair = orig_texs.len().saturating_sub(1);
         let pair_indices: Vec<usize> = if options.analyze_skipped_frames {
             (0..last_pair).collect()
         } else {
             vec![0, last_pair - 1]
         };
 
-        // Single encoder for ALL the work (no per-pair submit/readback)
+        // Single encoder for ALL the work
         let mut encoder = self
             .device
             .create_command_encoder(&CommandEncoderDescriptor::default());
+
+        // GPU resize: dispatch resize shader for each frame
+        let frame_texs: Vec<Texture> = orig_texs
+            .iter()
+            .map(|tex| self.resize_tex(&mut encoder, tex, tile_w.max(1), tile_h.max(1)))
+            .collect();
 
         // Pre-compute grayscale for every frame (shared across forward/backward passes)
         let gray_texs: Vec<Texture> = frame_texs
@@ -919,6 +970,55 @@ impl GpuPipeline {
             usage,
             view_formats: &[],
         })
+    }
+
+    fn resize_tex(
+        &self,
+        encoder: &mut CommandEncoder,
+        src: &Texture,
+        dst_w: u32,
+        dst_h: u32,
+    ) -> Texture {
+        let src_w = src.width();
+        let src_h = src.height();
+        let dst = self.make_tex(
+            dst_w,
+            dst_h,
+            TextureFormat::Rgba8Unorm,
+            TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING,
+            "resized",
+        );
+        let ubuf = self.device.create_buffer(&BufferDescriptor {
+            label: Some("resize_ubuf"),
+            size: 16,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.queue.write_buffer(
+            &ubuf,
+            0,
+            bytemuck::bytes_of(&[src_w as f32, src_h as f32, dst_w as f32, dst_h as f32]),
+        );
+        let bg = self.device.create_bind_group(&BindGroupDescriptor {
+            label: Some("bg_resize"),
+            layout: &self.bgl_resize,
+            entries: &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: BindingResource::TextureView(&Self::tex_view(src)),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: BindingResource::TextureView(&Self::tex_view(&dst)),
+                },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: ubuf.as_entire_binding(),
+                },
+            ],
+        });
+        self.dispatch_16(encoder, &self.resize, &bg, dst_w, dst_h);
+        dst
     }
 
     fn grayscale(&self, encoder: &mut CommandEncoder, frame: &Texture) -> Texture {
