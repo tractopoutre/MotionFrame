@@ -710,7 +710,12 @@ impl GpuPipeline {
         // GPU resize to tile size + grayscale for each needed frame
         let mut gray_map: Vec<(usize, Texture)> = Vec::with_capacity(orig_texs.len());
         for &(idx, ref tex) in &orig_texs {
-            let resized = self.resize_tex(&mut encoder, tex, tile_w.max(1), tile_h.max(1));
+            let interp = match options.resize_algorithm {
+                crate::pipeline::Interpolation::Nearest => 0u32,
+                crate::pipeline::Interpolation::Linear => 1,
+                _ => 2,
+            };
+            let resized = self.resize_tex(&mut encoder, tex, tile_w.max(1), tile_h.max(1), interp);
             let gray = self.grayscale(&mut encoder, &resized);
             gray_map.push((idx, gray));
         }
@@ -942,9 +947,14 @@ impl GpuPipeline {
             .create_command_encoder(&CommandEncoderDescriptor::default());
 
         // GPU resize: dispatch resize shader for each frame
+        let interp = match options.resize_algorithm {
+            crate::pipeline::Interpolation::Nearest => 0u32,
+            crate::pipeline::Interpolation::Linear => 1,
+            _ => 2,
+        };
         let frame_texs: Vec<Texture> = orig_texs
             .iter()
-            .map(|tex| self.resize_tex(&mut encoder, tex, tile_w.max(1), tile_h.max(1)))
+            .map(|tex| self.resize_tex(&mut encoder, tex, tile_w.max(1), tile_h.max(1), interp))
             .collect();
 
         // Pre-compute grayscale for every frame (shared across forward/backward passes)
@@ -1216,9 +1226,8 @@ impl GpuPipeline {
         src: &Texture,
         dst_w: u32,
         dst_h: u32,
+        interp: u32,
     ) -> Texture {
-        let src_w = src.width();
-        let src_h = src.height();
         let dst = self.make_tex(
             dst_w,
             dst_h,
@@ -1235,7 +1244,7 @@ impl GpuPipeline {
         self.queue.write_buffer(
             &ubuf,
             0,
-            bytemuck::bytes_of(&[src_w as f32, src_h as f32, dst_w as f32, dst_h as f32]),
+            bytemuck::bytes_of(&[interp as f32, 0.0, 0.0, 0.0]),
         );
         let bg = self.device.create_bind_group(&BindGroupDescriptor {
             label: Some("bg_resize"),
