@@ -34,7 +34,7 @@ pub struct GpuPipeline {
     queue: Queue,
     // Compute pipelines
     grayscale: ComputePipeline,
-    pyramid: ComputePipeline,
+    pyramid_blur: ComputePipeline,
     poly_expansion: ComputePipeline,
     flow_update: ComputePipeline,
     upsample: ComputePipeline,
@@ -44,6 +44,7 @@ pub struct GpuPipeline {
     combine_bidir: ComputePipeline,
     // Bind group layouts
     bgl_tex_in_out: BindGroupLayout,
+    bgl_pyramid: BindGroupLayout,
     bgl_poly: BindGroupLayout,
     bgl_tex_in_out_rg: BindGroupLayout,
     bgl_flow_update: BindGroupLayout,
@@ -90,6 +91,43 @@ impl GpuPipeline {
                 },
                 BindGroupLayoutEntry {
                     binding: 1,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::StorageTexture {
+                        access: StorageTextureAccess::WriteOnly,
+                        format: TextureFormat::R32Float,
+                        view_dimension: TextureViewDimension::D2,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        // 1 sampled texture + 1 uniform + 1 R32Float storage (pyramid blur from original)
+        let bgl_pyramid = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("bgl_pyramid"),
+            entries: &[
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: false },
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 2,
                     visibility: ShaderStages::COMPUTE,
                     ty: BindingType::StorageTexture {
                         access: StorageTextureAccess::WriteOnly,
@@ -369,6 +407,11 @@ impl GpuPipeline {
             bind_group_layouts: &[Some(&bgl_tex_in_out)],
             immediate_size: 0,
         });
+        let pl_pyramid = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("pl_pyramid"),
+            bind_group_layouts: &[Some(&bgl_pyramid)],
+            immediate_size: 0,
+        });
         let pl_poly = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("pl_poly"),
             bind_group_layouts: &[Some(&bgl_poly)],
@@ -440,7 +483,7 @@ impl GpuPipeline {
 
         // --- Compute pipelines ---
         let grayscale = Self::make_pipeline(&device, &pl_1ch, &mod_grayscale, "grayscale");
-        let pyramid = Self::make_pipeline(&device, &pl_1ch, &mod_pyramid, "pyramid");
+        let pyramid_blur = Self::make_pipeline(&device, &pl_pyramid, &mod_pyramid, "pyramid_blur");
         let poly_expansion = Self::make_pipeline(&device, &pl_poly, &mod_poly, "poly_expansion");
         let flow_update = Self::make_pipeline(&device, &pl_flow, &mod_flow, "flow_update");
         let upsample = Self::make_pipeline(&device, &pl_rg, &mod_upsample, "upsample");
@@ -489,7 +532,7 @@ impl GpuPipeline {
             device,
             queue,
             grayscale,
-            pyramid,
+            pyramid_blur,
             poly_expansion,
             flow_update,
             upsample,
@@ -498,6 +541,7 @@ impl GpuPipeline {
             accumulate,
             combine_bidir,
             bgl_tex_in_out,
+            bgl_pyramid,
             bgl_poly,
             bgl_tex_in_out_rg,
             bgl_flow_update,
@@ -1296,60 +1340,77 @@ impl GpuPipeline {
         out
     }
 
+    // allow(cast_lossless, cast_possible_wrap): level counts and sigma math fit f32
+    #[allow(clippy::cast_lossless, clippy::cast_possible_wrap)]
     fn pyramid_all(
         &self,
         encoder: &mut CommandEncoder,
         base: &Texture,
     ) -> Vec<(Texture, u32, u32)> {
+        let orig_w = base.width();
+        let orig_h = base.height();
+        let pyr_scale = 0.5f64;
+
         let mut levels: Vec<(Texture, u32, u32)> = Vec::new();
 
-        let mut cur_w = base.width();
-        let mut cur_h = base.height();
-        let mut cur_src: Option<Texture> = None;
+        // Build each level independently from the ORIGINAL base texture
+        // with the correct Gaussian anti-aliasing (matches CPU build_level_image).
+        for level_k in 1u32.. {
+            let scale = pyr_scale.powi(level_k as i32);
+            let next_w = (f64::from(orig_w) * scale).round() as u32;
+            let next_h = (f64::from(orig_h) * scale).round() as u32;
 
-        loop {
-            let next_w = (cur_w / 2).max(1);
-            let next_h = (cur_h / 2).max(1);
-
-            // Stop before creating a level below 32px — the coarsest level
-            // must be >= 32 in both dimensions so polynomial expansion has
-            // enough pixels for meaningful convolution.
             if next_w < 32 || next_h < 32 {
                 break;
             }
 
-            let down = self.make_tex(
-                next_w,
-                next_h,
+            // Compute Gaussian sigma matching CPU: sigma = (1/scale - 1) * 0.5
+            let sigma = ((1.0 / scale) - 1.0) * 0.5;
+            let ksize = ((sigma * 5.0).round() as u32).max(3) | 1;
+            let half = (ksize / 2) as i32;
+
+            let scale_x = f64::from(orig_w) / f64::from(next_w);
+            let scale_y = f64::from(orig_h) / f64::from(next_h);
+
+            let out = self.make_tex(
+                next_w, next_h,
                 TextureFormat::R32Float,
                 TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING,
                 "pyr",
             );
 
-            let src = cur_src.as_ref().unwrap_or(base);
-            let bg = {
-                let down_view = Self::tex_view(&down);
-                self.device.create_bind_group(&BindGroupDescriptor {
-                    label: Some("bg_pyr"),
-                    layout: &self.bgl_tex_in_out,
-                    entries: &[
-                        BindGroupEntry {
-                            binding: 0,
-                            resource: BindingResource::TextureView(&Self::tex_view(src)),
-                        },
-                        BindGroupEntry {
-                            binding: 1,
-                            resource: BindingResource::TextureView(&down_view),
-                        },
-                    ],
-                })
-            };
-            self.dispatch_16(encoder, &self.pyramid, &bg, next_w, next_h);
+            let ubuf = self.device.create_buffer(&BufferDescriptor {
+                label: Some("pyr_ubuf"),
+                size: 16,
+                usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.queue.write_buffer(
+                &ubuf, 0,
+                bytemuck::bytes_of(&[scale_x as f32, scale_y as f32, sigma as f32, half as f32]),
+            );
 
-            levels.push((down, next_w, next_h));
-            cur_src = Some(levels.last().unwrap().0.clone());
-            cur_w = next_w;
-            cur_h = next_h;
+            let bg = self.device.create_bind_group(&BindGroupDescriptor {
+                label: Some("bg_pyr"),
+                layout: &self.bgl_pyramid,
+                entries: &[
+                    BindGroupEntry {
+                        binding: 0,
+                        resource: BindingResource::TextureView(&Self::tex_view(base)),
+                    },
+                    BindGroupEntry {
+                        binding: 1,
+                        resource: ubuf.as_entire_binding(),
+                    },
+                    BindGroupEntry {
+                        binding: 2,
+                        resource: BindingResource::TextureView(&Self::tex_view(&out)),
+                    },
+                ],
+            });
+            self.dispatch_16(encoder, &self.pyramid_blur, &bg, next_w, next_h);
+
+            levels.push((out, next_w, next_h));
         }
 
         levels.reverse();
