@@ -5,7 +5,7 @@ use rayon::prelude::*;
 use crate::pipeline::{Flow, GenerateOptions, ImageRgba8};
 use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout, BindGroupLayoutDescriptor,
-    BindGroupLayoutEntry, BindingResource, BindingType, BufferBindingType, BufferDescriptor,
+    BindGroupLayoutEntry, BindingResource, BindingType, Buffer, BufferBindingType, BufferDescriptor,
     BufferUsages, CommandEncoder, CommandEncoderDescriptor, ComputePassDescriptor, ComputePipeline,
     ComputePipelineDescriptor, Device, DeviceDescriptor, Extent3d, Instance, InstanceDescriptor,
     MapMode, Origin3d, PipelineCompilationOptions, PipelineLayout, PipelineLayoutDescriptor,
@@ -653,6 +653,244 @@ impl GpuPipeline {
             );
             (tex, lw, lh)
         })
+    }
+
+    /// Run flow computation for all batches in a SINGLE GPU submission.
+    ///
+    /// Uploads frames once, processes every batch (forward+backward+accumulate)
+    /// in one encoder, records copy-to-staging for all outputs, submits once,
+    /// polls once, and returns all flows.
+    ///
+    /// `frames`: original-resolution premultiplied RGBA frames.
+    /// `batches`: frame index groups, one per output flow.
+    /// `tail_batch`: optional additional batch for loop wrap (first+last frames).
+    #[allow(clippy::too_many_lines, clippy::cast_lossless)]
+    pub fn compute_batch_flows(
+        &self,
+        frames: &[ImageRgba8],
+        batches: &[Vec<usize>],
+        tail_batch: Option<&[usize]>,
+        options: &GenerateOptions,
+    ) -> Vec<Flow> {
+        if frames.is_empty() || batches.is_empty() {
+            return Vec::new();
+        }
+
+        let (atlas_cols, atlas_rows) = options.atlas_dims;
+        let src_aspect = frames[0].width as f64 / frames[0].height as f64;
+        let (tile_w, tile_h) = crate::pipeline::atlas_layout::compute_tile_dims(
+            options.atlas_resolution,
+            atlas_cols,
+            atlas_rows,
+            src_aspect,
+        );
+
+        // Collect all unique frame indices needed across all batches + tail
+        let mut needed: Vec<usize> = batches.iter().flat_map(|b| b.iter().copied()).collect();
+        if let Some(tail) = tail_batch {
+            needed.extend_from_slice(tail);
+        }
+        needed.sort_unstable();
+        needed.dedup();
+
+        // Upload only the needed frames
+        let orig_texs: Vec<(usize, Texture)> = needed
+            .iter()
+            .map(|&i| (i, self.upload_frame(&frames[i])))
+            .collect();
+
+        let flow_w = tile_w;
+        let flow_h = tile_h;
+
+        // Single encoder for ALL batch work
+        let mut encoder = self
+            .device
+            .create_command_encoder(&CommandEncoderDescriptor::default());
+
+        // GPU resize to tile size + grayscale for each needed frame
+        let mut gray_map: Vec<(usize, Texture)> = Vec::with_capacity(orig_texs.len());
+        for &(idx, ref tex) in &orig_texs {
+            let resized = self.resize_tex(&mut encoder, tex, tile_w.max(1), tile_h.max(1));
+            let gray = self.grayscale(&mut encoder, &resized);
+            gray_map.push((idx, gray));
+        }
+
+        let gray_of = |idx: usize| -> &Texture {
+            let entry = gray_map.iter().find(|(i, _)| *i == idx).unwrap();
+            &entry.1
+        };
+
+        // Process each batch: forward+backward+combine per pair, accumulate per batch
+        let mut all_batches: Vec<&[usize]> = batches.iter().map(Vec::as_slice).collect();
+        if let Some(tail) = tail_batch {
+            all_batches.push(tail);
+        }
+        let mut batch_accum = Vec::with_capacity(all_batches.len());
+
+        for batch_indices in all_batches {
+            if batch_indices.len() < 2 {
+                let (fw, fh) = (flow_w, flow_h);
+                let tex = self.make_tex(
+                    fw, fh,
+                    TextureFormat::Rg32Float,
+                    TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_SRC,
+                    "zero_accum",
+                );
+                batch_accum.push((tex, fw, fh));
+                continue;
+            }
+
+            // Determine pair indices for this batch
+            let last_pair = batch_indices.len().saturating_sub(1);
+            let pair_indices: Vec<usize> = if options.analyze_skipped_frames {
+                (0..last_pair).collect()
+            } else {
+                vec![0, last_pair - 1]
+            };
+
+            // Init per-batch accumulation texture to zeros
+            let init_accum = self.make_tex(
+                flow_w, flow_h,
+                TextureFormat::Rg32Float,
+                TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_SRC | TextureUsages::COPY_DST,
+                "batch_accum",
+            );
+            let zeros = vec![0u8; (flow_w * flow_h * 8) as usize];
+            self.queue.write_texture(
+                TexelCopyTextureInfo { texture: &init_accum, mip_level: 0, origin: Origin3d::ZERO, aspect: TextureAspect::All },
+                &zeros,
+                TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(flow_w * 8), rows_per_image: Some(flow_h) },
+                Extent3d { width: flow_w, height: flow_h, depth_or_array_layers: 1 },
+            );
+
+            let mut accum = init_accum;
+            let mut actual_w = flow_w;
+            let mut actual_h = flow_h;
+
+            for &pair_idx in &pair_indices {
+                let i0 = batch_indices[pair_idx];
+                let i1 = batch_indices[pair_idx + 1];
+                let g0 = gray_of(i0);
+                let g1 = gray_of(i1);
+
+                let (fwd_tex, fw, fh) = self.compute_pair_flow(
+                    &mut encoder, g0, g1,
+                    options.farneback.poly_n, options.farneback.poly_sigma,
+                    options.farneback.winsize, options.farneback.use_gaussian,
+                    options.farneback.iterations,
+                );
+                let (bwd_tex, _, _) = self.compute_pair_flow(
+                    &mut encoder, g1, g0,
+                    options.farneback.poly_n, options.farneback.poly_sigma,
+                    options.farneback.winsize, options.farneback.use_gaussian,
+                    options.farneback.iterations,
+                );
+
+                let combined = self.make_tex(
+                    fw, fh,
+                    TextureFormat::Rg32Float,
+                    TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING,
+                    "combined",
+                );
+                self.combine_flows(&mut encoder, &fwd_tex, &bwd_tex, &combined, fw, fh);
+
+                let next_accum = self.make_tex(
+                    fw, fh,
+                    TextureFormat::Rg32Float,
+                    TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_SRC,
+                    "batch_accum_n",
+                );
+                self.accumulate_flow(&mut encoder, &accum, &combined, &next_accum, fw, fh);
+                accum = next_accum;
+                actual_w = fw;
+                actual_h = fh;
+            }
+
+            batch_accum.push((accum, actual_w, actual_h));
+        }
+
+        // --- Record copy-to-staging for all batch accum textures (in the SAME encoder) ---
+        #[allow(clippy::items_after_statements)]
+        struct StagingSlot {
+            buf: Buffer,
+            bpr: u32,
+            w: u32,
+            h: u32,
+        }
+        let mut staging_slots: Vec<StagingSlot> = Vec::with_capacity(batch_accum.len());
+        for &(ref tex, w, h) in &batch_accum {
+            let bpr = ((w * 8) + 255) & !255;
+            let staging = self.device.create_buffer(&BufferDescriptor {
+                label: Some("batch_readback"),
+                size: (bpr * h) as u64,
+                usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            encoder.copy_texture_to_buffer(
+                TexelCopyTextureInfo { texture: tex, mip_level: 0, origin: Origin3d::ZERO, aspect: TextureAspect::All },
+                TexelCopyBufferInfo {
+                    buffer: &staging,
+                    layout: TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(bpr), rows_per_image: Some(h) },
+                },
+                Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            );
+            staging_slots.push(StagingSlot { buf: staging, bpr, w, h });
+        }
+
+        // Single submit for ALL work
+        self.queue.submit(Some(encoder.finish()));
+
+        // Poll once, then read all staging buffers
+        let (tx, rx) = std::sync::mpsc::channel();
+        for slot in &staging_slots {
+            let tx = tx.clone();
+            slot.buf.slice(..).map_async(MapMode::Read, move |r| {
+                let _ = tx.send(r.is_ok());
+            });
+        }
+        self.device
+            .poll(wgpu::PollType::Wait { submission_index: None, timeout: None })
+            .ok();
+        // Drain all map completions
+        for _ in &staging_slots {
+            let _ = rx.recv();
+        }
+
+        // Read and normalize each flow
+        let mut flows: Vec<Flow> = Vec::with_capacity(staging_slots.len());
+        for slot in &staging_slots {
+            let data = slot.buf.slice(..).get_mapped_range();
+            let mut flow = Flow::zeros(slot.w, slot.h);
+            for y in 0..slot.h as usize {
+                for x in 0..slot.w as usize {
+                    let off = y * slot.bpr as usize + x * 8;
+                    let fx = f32::from_le_bytes(data[off..off + 4].try_into().unwrap());
+                    let fy = f32::from_le_bytes(data[off + 4..off + 8].try_into().unwrap());
+                    flow.data[y * slot.w as usize + x] = [fx, fy];
+                }
+            }
+            drop(data);
+
+            // Normalize
+            let nw = slot.w as f32;
+            let nh = slot.h as f32;
+            for px in &mut flow.data {
+                px[0] /= nw;
+                px[1] /= nh;
+            }
+
+            // Resize to expected output if needed
+            let result = if slot.w != flow_w || slot.h != flow_h {
+                resize_flow_bilinear(&flow, flow_w, flow_h)
+            } else {
+                flow
+            };
+            flows.push(result);
+
+            slot.buf.unmap();
+        }
+
+        flows
     }
 
     /// Run GPU flow computation on all provided frames and return the accumulated flow.
