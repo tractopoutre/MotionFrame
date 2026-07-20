@@ -84,6 +84,8 @@ pub struct MotionFrameApp<P: Platform> {
     pending_options: Option<GenerateOptions>,
     progress_fraction: f32,
     progress_label: String,
+    gen_start_time: Option<std::time::Instant>,
+    gen_elapsed: Option<std::time::Duration>,
     error_banner: Option<String>,
     current_tab: TabKind,
     zoom: f32,
@@ -127,6 +129,8 @@ impl<P: Platform> MotionFrameApp<P> {
             pending_options: None,
             progress_fraction: 0.0,
             progress_label: String::new(),
+            gen_start_time: None,
+            gen_elapsed: None,
             error_banner: None,
             current_tab: TabKind::default(),
             zoom: 1.0,
@@ -289,6 +293,7 @@ impl<P: Platform> MotionFrameApp<P> {
         };
         self.progress_fraction = 0.0;
         self.progress_label = "Starting…".to_string();
+        self.gen_start_time = Some(std::time::Instant::now());
     }
 
     fn poll_worker(&mut self) {
@@ -296,6 +301,8 @@ impl<P: Platform> MotionFrameApp<P> {
             match ev {
                 GenerationEvent::Progress(p) => self.apply_progress(p),
                 GenerationEvent::Done(encode_result) => {
+                    self.gen_elapsed = self.gen_start_time.map(|t| t.elapsed());
+                    self.gen_start_time = None;
                     self.playback.frame_count = encode_result.total_frames;
                     self.playback.set_strength(encode_result.strength as f32);
                     self.playback.time = 0.0;
@@ -307,6 +314,8 @@ impl<P: Platform> MotionFrameApp<P> {
                     self.state = AppState::Done;
                 }
                 GenerationEvent::Cancelled => {
+                    self.gen_start_time = None;
+                    self.gen_elapsed = None;
                     self.pending_options = None;
                     let return_to = match std::mem::take(&mut self.state) {
                         AppState::Generating { return_to } => *return_to,
@@ -315,6 +324,8 @@ impl<P: Platform> MotionFrameApp<P> {
                     self.state = return_to;
                 }
                 GenerationEvent::Error(msg) => {
+                    self.gen_start_time = None;
+                    self.gen_elapsed = None;
                     self.pending_options = None;
                     let return_to = match std::mem::take(&mut self.state) {
                         AppState::Generating { return_to } => *return_to,
@@ -808,6 +819,20 @@ impl<P: Platform> MotionFrameApp<P> {
             .show_inside(host_ui, |ui| {
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
+                    // Elapsed timer: live during generation, final when done
+                    let elapsed = self
+                        .gen_elapsed
+                        .or_else(|| self.gen_start_time.map(|t| t.elapsed()));
+                    if let Some(dur) = elapsed {
+                        let secs = dur.as_secs();
+                        let millis = dur.subsec_millis();
+                        ui.label(
+                            egui::RichText::new(format!("{:02}:{:02}.{:03}", secs / 60, secs % 60, millis))
+                                .size(14.0)
+                                .monospace(),
+                        );
+                    }
+
                     if matches!(self.state, AppState::Generating { .. }) {
                         ui.add(egui::ProgressBar::new(self.progress_fraction).show_percentage());
                         ui.label(&self.progress_label);
