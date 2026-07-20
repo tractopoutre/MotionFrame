@@ -1,23 +1,31 @@
-// Flow update: builds 5 tensor elements from two polynomial expansions,
-// applies 5×5 binomial blur, solves the 2×2 linear system.
-//
-// Each thread reads the 5×5 neighborhood of poly coefficients, computes
-// per-pixel tensor elements, accumulates with binomial weights, and solves.
-// Prior flow warps frame B's polynomial expansion.
-//
-// binding 0: poly_a (texture_2d<f32>, RGBA32F, 2 texels per pixel)
-// binding 1: poly_b (texture_2d<f32>, RGBA32F, 2 texels per pixel)
-// binding 2: prior_flow (texture_2d<f32>, RG32F)
-// binding 3: params (uniform vec4) — x = winsize, y = scale_factor
-// binding 4: out_tex (texture_storage_2d<rg32float, write>)
-
 @group(0) @binding(0) var poly_a_tex: texture_2d<f32>;
 @group(0) @binding(1) var poly_b_tex: texture_2d<f32>;
 @group(0) @binding(2) var prior_flow_tex: texture_2d<f32>;
 @group(0) @binding(3) var<uniform> params: vec4<f32>;
 @group(0) @binding(4) var out_tex: texture_storage_2d<rg32float, write>;
+@group(0) @binding(5) var<storage, read> kernel: array<f32>;
 
-const BINOM: array<f32, 5> = array(1.0 / 16.0, 4.0 / 16.0, 6.0 / 16.0, 4.0 / 16.0, 1.0 / 16.0);
+// params.x = winsize, params.y = (unused), params.z = use_gaussian
+// kernel: winsize elements (normalized gaussian or all 1.0 for box)
+
+const B: i32 = 5;
+const BW: array<f32, 5> = array(0.14, 0.14, 0.4472, 0.4472, 0.4472);
+
+fn border_weight(x: i32, y: i32, w: i32, h: i32) -> f32 {
+    var wx = 1.0;
+    if (x < B) {
+        wx = BW[x];
+    } else if (x >= w - B) {
+        wx = BW[w - 1 - x];
+    }
+    var wy = 1.0;
+    if (y < B) {
+        wy = BW[y];
+    } else if (y >= h - B) {
+        wy = BW[h - 1 - y];
+    }
+    return wx * wy;
+}
 
 struct Poly5 {
     r4: f32, r6: f32, r5: f32, r2: f32, r3: f32,
@@ -58,17 +66,13 @@ fn sample_poly_bilinear(tex: texture_2d<f32>, u: f32, v: f32, w: i32, h: i32) ->
     );
 }
 
-struct Tensors {
-    t0: f32, t1: f32, t2: f32, t3: f32, t4: f32,
-}
-
-fn build_tensors(pa: Poly5, pb: Poly5, dx: f32, dy: f32) -> Tensors {
+fn build_tensors(pa: Poly5, pb: Poly5, dx: f32, dy: f32) -> array<f32, 5> {
     let a_val = (pa.r4 + pb.r4) * 0.5;
     let b_val = (pa.r6 + pb.r6) * 0.25;
     let c_val = (pa.r5 + pb.r5) * 0.5;
     let d_val = (pb.r2 - pa.r2) * 0.5 + a_val * dx + b_val * dy;
     let e_val = (pb.r3 - pa.r3) * 0.5 + b_val * dx + c_val * dy;
-    return Tensors(
+    return array(
         a_val * a_val + b_val * b_val,
         b_val * a_val + b_val * c_val,
         b_val * b_val + c_val * c_val,
@@ -88,49 +92,52 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         return;
     }
 
-    // Read prior flow at this pixel
-    let prior_dims = textureDimensions(prior_flow_tex);
-    let prior = textureLoad(prior_flow_tex, vec2(min(x, i32(prior_dims.x) - 1), min(y, i32(prior_dims.y) - 1)), 0);
-    let dx = prior.x;
-    let dy = prior.y;
+    let winsize = i32(params.x);
+    let half = winsize / 2;
+    let use_gaussian = params.z != 0.0;
 
-    // 5×5 binomial blur on tensor elements built from the neighborhood
     var t0 = 0.0; var t1 = 0.0; var t2 = 0.0; var t3 = 0.0; var t4 = 0.0;
 
-    for (var ky = 0i; ky < 5; ky++) {
-        let wy = BINOM[ky];
-        for (var kx = 0i; kx < 5; kx++) {
-            let wx = BINOM[kx];
-            let w = wx * wy;
+    for (var ky = 0i; ky < winsize; ky++) {
+        let ny = clamp(y + ky - half, 0, ph - 1);
+        let kw_y = select(1.0, kernel[ky], use_gaussian);
+        for (var kx = 0i; kx < winsize; kx++) {
+            let nx = clamp(x + kx - half, 0, pw - 1);
 
-            let nx = clamp(x + kx - 2, 0, pw - 1);
-            let ny = clamp(y + ky - 2, 0, ph - 1);
+            let bw = border_weight(nx, ny, pw, ph);
+            let bw2 = bw * bw;
+
+            let prior = textureLoad(prior_flow_tex, vec2(nx, ny), 0);
+            let ndx = prior.x;
+            let ndy = prior.y;
 
             let pa = load_poly(poly_a_tex, nx, ny);
-            let pb = sample_poly_bilinear(poly_b_tex, f32(nx) + dx, f32(ny) + dy, pw, ph);
-            let tens = build_tensors(pa, pb, dx, dy);
+            let pb = sample_poly_bilinear(poly_b_tex, f32(nx) + ndx, f32(ny) + ndy, pw, ph);
+            let tens = build_tensors(pa, pb, ndx, ndy);
 
-            t0 += tens.t0 * w;
-            t1 += tens.t1 * w;
-            t2 += tens.t2 * w;
-            t3 += tens.t3 * w;
-            t4 += tens.t4 * w;
+            let kw = select(kw_y, kw_y * kernel[kx], use_gaussian);
+            t0 += tens[0] * bw2 * kw;
+            t1 += tens[1] * bw2 * kw;
+            t2 += tens[2] * bw2 * kw;
+            t3 += tens[3] * bw2 * kw;
+            t4 += tens[4] * bw2 * kw;
         }
     }
 
-    // Solve 2×2 system
-    let scale_factor = params.y;
-    // Binomial kernel is already normalized (sum = 1.0), no additional scaling needed
+    var inv_norm = 1.0;
+    if (!use_gaussian) {
+        inv_norm = 1.0 / f32(winsize * winsize);
+    }
 
-    let g11_s = t0;
-    let g12_s = t1;
-    let g22_s = t2;
-    let h1_s = t3;
-    let h2_s = t4;
+    let g11_s = t0 * inv_norm;
+    let g12_s = t1 * inv_norm;
+    let g22_s = t2 * inv_norm;
+    let h1_s = t3 * inv_norm;
+    let h2_s = t4 * inv_norm;
 
     let det = g11_s * g22_s - g12_s * g12_s + 1e-3;
     let flow_x = (g22_s * h1_s - g12_s * h2_s) / det;
     let flow_y = (g11_s * h2_s - g12_s * h1_s) / det;
 
-    textureStore(out_tex, vec2(x, y), vec4(flow_x * scale_factor, flow_y * scale_factor, 0.0, 0.0));
+    textureStore(out_tex, vec2(x, y), vec4(flow_x, flow_y, 0.0, 0.0));
 }

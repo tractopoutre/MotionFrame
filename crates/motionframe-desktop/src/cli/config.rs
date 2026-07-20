@@ -74,6 +74,7 @@ pub struct CliConfig {
     pub motion_vector_encoding: Option<MotionVectorEncodingArg>,
     pub premultiply_color: Option<bool>,
     pub stagger_pack: Option<bool>,
+    pub compute_backend: Option<String>,
     pub analyze_skipped_frames: Option<bool>,
     pub halve_motion_vector: Option<bool>,
     pub temporal_smoothing: Option<f32>,
@@ -122,6 +123,10 @@ impl CliConfig {
         self.motion_vector_encoding = args.motion_vector_encoding.or(self.motion_vector_encoding);
         self.premultiply_color = args.premultiply_color().or(self.premultiply_color);
         self.stagger_pack = args.stagger_pack().or(self.stagger_pack);
+        self.compute_backend = args
+            .compute_backend()
+            .map(|b| b.to_string())
+            .or(self.compute_backend);
         self.analyze_skipped_frames = args
             .analyze_skipped_frames()
             .or(self.analyze_skipped_frames);
@@ -133,9 +138,18 @@ impl CliConfig {
         self.input_atlas_rows = args.input_atlas_rows.or(self.input_atlas_rows);
         self.trim_tail = args.trim_tail().or(self.trim_tail);
         self.output_name_format = args.output_name_format.clone().or(self.output_name_format);
-        self.output_name_basename = args.output_name_basename.clone().or(self.output_name_basename);
-        self.output_suffix_color = args.output_suffix_color.clone().or(self.output_suffix_color);
-        self.output_suffix_motion = args.output_suffix_motion.clone().or(self.output_suffix_motion);
+        self.output_name_basename = args
+            .output_name_basename
+            .clone()
+            .or(self.output_name_basename);
+        self.output_suffix_color = args
+            .output_suffix_color
+            .clone()
+            .or(self.output_suffix_color);
+        self.output_suffix_motion = args
+            .output_suffix_motion
+            .clone()
+            .or(self.output_suffix_motion);
         self.output_suffix_meta = args.output_suffix_meta.clone().or(self.output_suffix_meta);
         self.start_frame = args.start_frame.or(self.start_frame);
         self.end_frame = args.end_frame.or(self.end_frame);

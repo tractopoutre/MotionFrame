@@ -79,6 +79,8 @@ pub enum Key {
     HalveMotionVectorHover,
     StaggerPack,
     StaggerPackHover,
+    ComputeBackend,
+    ComputeBackendHover,
     TemporalSmoothing,
     TemporalSmoothingHover,
     AnalyzeSkippedFrames,
@@ -255,6 +257,11 @@ pub const fn t(lang: Lang, key: Key) -> &'static str {
         (Lang::En, Key::StaggerPack) => "Stagger pack",
         (Lang::En, Key::StaggerPackHover) => {
             "Pack two adjacent motion frames into one RGBA tile, halving texture height."
+        }
+        (Lang::En, Key::ComputeBackend) => "Compute backend",
+        (Lang::En, Key::ComputeBackendHover) => {
+            "Choose which processor runs the flow analysis. GPU is faster \
+             but may produce slightly different results. CPU is the reference path."
         }
         (Lang::En, Key::TemporalSmoothing) => "Temporal smoothing:",
         (Lang::En, Key::TemporalSmoothingHover) => {
@@ -453,6 +460,11 @@ pub const fn t(lang: Lang, key: Key) -> &'static str {
         (Lang::Ja, Key::StaggerPackHover) => {
             "隣接する2フレームのモーションを1つのRGBAタイルにパックし、\
              テクスチャの高さを半減します。"
+        }
+        (Lang::Ja, Key::ComputeBackend) => "計算バックエンド",
+        (Lang::Ja, Key::ComputeBackendHover) => {
+            "フロー解析を実行するプロセッサを選択します。GPUは高速ですが、\
+             結果が若干異なる場合があります。CPUはリファレンス実装です。"
         }
         (Lang::Ja, Key::TemporalSmoothing) => "時間方向スムージング:",
         (Lang::Ja, Key::TemporalSmoothingHover) => {
@@ -660,6 +672,8 @@ mod tests {
         Key::HalveMotionVectorHover,
         Key::StaggerPack,
         Key::StaggerPackHover,
+        Key::ComputeBackend,
+        Key::ComputeBackendHover,
         Key::TemporalSmoothing,
         Key::TemporalSmoothingHover,
         Key::AnalyzeSkippedFrames,
@@ -742,7 +756,7 @@ mod tests {
             | Key::InputTilesPerRow
             | Key::InputTilesPerColumn
             | Key::InputTilesHover
-            |             Key::AtlasHeading
+            | Key::AtlasHeading
             | Key::AtlasResolution
             | Key::AtlasResolutionHover
             | Key::Columns

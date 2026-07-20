@@ -4,7 +4,9 @@ use motionframe_engine::io::metadata::{self, AtlasMetadata};
 use motionframe_engine::io::sequence;
 use motionframe_engine::io::tga::{load_rgba, save_tga};
 use motionframe_engine::io::{slice_atlas, InMemoryFrames};
-use motionframe_engine::pipeline::output_naming::{interpolate_name_format, NameTokens, OutputFileType};
+use motionframe_engine::pipeline::output_naming::{
+    interpolate_name_format, NameTokens, OutputFileType,
+};
 use motionframe_engine::pipeline::run::{self, EncodeResult};
 use motionframe_engine::pipeline::{GenerateOptions, ImageRgba8, Progress};
 
@@ -33,7 +35,8 @@ pub fn run_convert(mut job: ConvertJob) -> Result<(), CliError> {
     let gpu = motionframe_engine::gpu::GpuPipeline::try_init();
     if let Some(gpu) = gpu.as_ref() {
         eprintln!("[gpu] using GPU pipeline (RTX 4090 or equivalent)");
-        match run::run_pipeline_with_gpu(&source, &job.options, &progress_fn, &cancel_fn, Some(gpu)) {
+        match run::run_pipeline_with_gpu(&source, &job.options, &progress_fn, &cancel_fn, Some(gpu))
+        {
             Ok(r) => {
                 result = r;
                 eprintln!("[gpu] GPU pipeline succeeded");

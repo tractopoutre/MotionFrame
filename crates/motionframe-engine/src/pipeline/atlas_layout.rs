@@ -36,13 +36,13 @@ pub fn compute_tile_dims(
 ) -> (u32, u32) {
     let (cols, rows) = (cols.max(1), rows.max(1));
     // Start with width filling the atlas resolution horizontally.
-    let mut tile_w = (atlas_resolution as f64 / cols as f64).floor() as u32;
-    let mut tile_h = (tile_w as f64 / input_aspect_ratio).round() as u32;
+    let mut tile_w = (f64::from(atlas_resolution) / f64::from(cols)).floor() as u32;
+    let mut tile_h = (f64::from(tile_w) / input_aspect_ratio).round() as u32;
 
     // If rows * tile_h exceeds atlas_resolution, clamp height and recompute width.
     if rows.saturating_mul(tile_h) > atlas_resolution {
-        tile_h = (atlas_resolution as f64 / rows as f64).floor() as u32;
-        tile_w = (tile_h as f64 * input_aspect_ratio).round() as u32;
+        tile_h = (f64::from(atlas_resolution) / f64::from(rows)).floor() as u32;
+        tile_w = (f64::from(tile_h) * input_aspect_ratio).round() as u32;
     }
 
     // Ensure minimum tile dimension and within atlas_resolution.
@@ -92,7 +92,8 @@ pub fn pick_layout(
                 continue;
             }
 
-            let (tile_w, tile_h) = compute_tile_dims(atlas_resolution, cols, rows, input_aspect_ratio);
+            let (tile_w, tile_h) =
+                compute_tile_dims(atlas_resolution, cols, rows, input_aspect_ratio);
 
             if tile_w < MIN_TILE_DIM || tile_h < MIN_TILE_DIM {
                 continue;
@@ -103,7 +104,7 @@ pub fn pick_layout(
                 continue;
             }
 
-            let tile_aspect = tile_w as f64 / tile_h as f64;
+            let tile_aspect = f64::from(tile_w) / f64::from(tile_h);
             let aspect_diff = (tile_aspect - input_aspect_ratio).abs();
             let wasted = cols.saturating_mul(rows) - frame_count;
 
@@ -185,7 +186,7 @@ mod tests {
         assert_eq!(l.cols * l.rows, 64);
         assert_eq!(l.padding, 0);
         // Square tiles for square aspect.
-        let diff = (l.tile_width as f64 / l.tile_height as f64 - 1.0).abs();
+        let diff = (f64::from(l.tile_width) / f64::from(l.tile_height) - 1.0).abs();
         assert!(diff < 0.1, "tile aspect diff too large: {diff}");
     }
 
@@ -196,16 +197,22 @@ mod tests {
         // Tiles should be wider than tall to match input aspect
         let tile_aspect = l.tile_width as f64 / l.tile_height as f64;
         let diff = (tile_aspect - aspect).abs();
-        assert!(diff < 0.3, "tile aspect {tile_aspect} too far from input {aspect}: diff {diff}");
+        assert!(
+            diff < 0.3,
+            "tile aspect {tile_aspect} too far from input {aspect}: diff {diff}"
+        );
     }
 
     #[test]
     fn pick_layout_tall_aspect_prefers_tall_grid() {
         let aspect = tall_aspect();
         let l = pick_layout(64, aspect, 2048, 8192, 8).unwrap();
-        let tile_aspect = l.tile_width as f64 / l.tile_height as f64;
+        let tile_aspect = f64::from(l.tile_width) / f64::from(l.tile_height);
         let diff = (tile_aspect - aspect).abs();
-        assert!(diff < 0.3, "tile aspect {tile_aspect} too far from input {aspect}: diff {diff}");
+        assert!(
+            diff < 0.3,
+            "tile aspect {tile_aspect} too far from input {aspect}: diff {diff}"
+        );
     }
 
     #[test]

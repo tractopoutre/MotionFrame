@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
-use motionframe_engine::pipeline::atlas_layout::{compute_tile_dims, pick_layout, AtlasLayout, DEFAULT_PADDING_BOUND};
+use motionframe_engine::pipeline::atlas_layout::{
+    compute_tile_dims, pick_layout, AtlasLayout, DEFAULT_PADDING_BOUND,
+};
 use motionframe_engine::pipeline::output_detents::{build_output_count_detents, DetentEntry};
 use motionframe_engine::pipeline::output_naming::OutputFileType;
 use motionframe_engine::pipeline::{GenerateOptions, Interpolation, MotionVectorEncoding};
@@ -98,6 +100,16 @@ impl ConvertJob {
             .unwrap_or(options.trim_tail_for_exact_output_count);
         options.premultiplied_alpha = cfg.premultiply_color.unwrap_or(options.premultiplied_alpha);
         options.stagger_pack = cfg.stagger_pack.unwrap_or(options.stagger_pack);
+        options.compute_backend = cfg
+            .compute_backend
+            .as_deref()
+            .and_then(|s| match s {
+                "cpu" => Some(motionframe_engine::pipeline::ComputeBackend::Cpu),
+                "gpu" => Some(motionframe_engine::pipeline::ComputeBackend::Gpu),
+                "auto" => Some(motionframe_engine::pipeline::ComputeBackend::Auto),
+                _ => None,
+            })
+            .unwrap_or(options.compute_backend);
         options.analyze_skipped_frames = cfg
             .analyze_skipped_frames
             .unwrap_or(options.analyze_skipped_frames);
@@ -121,17 +133,21 @@ impl ConvertJob {
             Some(MotionVectorEncodingArg::Normal) => MotionVectorEncoding::SidefxLabsR8G8,
         };
         options.output_name_format = cfg.output_name_format.unwrap_or(options.output_name_format);
-        options.output_name_basename = cfg.output_name_basename.unwrap_or(options.output_name_basename);
-        options.output_suffix_color = cfg.output_suffix_color.unwrap_or(options.output_suffix_color);
-        options.output_suffix_motion = cfg.output_suffix_motion.unwrap_or(options.output_suffix_motion);
+        options.output_name_basename = cfg
+            .output_name_basename
+            .unwrap_or(options.output_name_basename);
+        options.output_suffix_color = cfg
+            .output_suffix_color
+            .unwrap_or(options.output_suffix_color);
+        options.output_suffix_motion = cfg
+            .output_suffix_motion
+            .unwrap_or(options.output_suffix_motion);
         options.output_suffix_meta = cfg.output_suffix_meta.unwrap_or(options.output_suffix_meta);
         options.start_frame = cfg.start_frame.unwrap_or(options.start_frame);
         options.end_frame = cfg.end_frame.unwrap_or(options.end_frame);
 
         if options.end_frame != 0 && options.start_frame >= options.end_frame {
-            return Err(CliError::Argument(
-                "--start must be less than --end".into(),
-            ));
+            return Err(CliError::Argument("--start must be less than --end".into()));
         }
 
         Ok(Self {
@@ -208,13 +224,19 @@ impl ConvertJob {
 
         // Check for output path collisions
         let color_path = crate::cli::run::resolve_output_paths(
-            &self.output, &self.options, OutputFileType::Color,
+            &self.output,
+            &self.options,
+            OutputFileType::Color,
         );
         let motion_path = crate::cli::run::resolve_output_paths(
-            &self.output, &self.options, OutputFileType::Motion,
+            &self.output,
+            &self.options,
+            OutputFileType::Motion,
         );
         let meta_path = crate::cli::run::resolve_output_paths(
-            &self.output, &self.options, OutputFileType::Meta,
+            &self.output,
+            &self.options,
+            OutputFileType::Meta,
         );
         if color_path == motion_path {
             return Err(CliError::Argument(format!(

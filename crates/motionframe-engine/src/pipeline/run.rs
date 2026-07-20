@@ -147,29 +147,70 @@ pub fn run_pipeline(
     progress: &(dyn Fn(Progress) + Sync),
     cancel: &(dyn Fn() -> bool + Sync),
 ) -> Result<EncodeResult, PipelineError> {
-    run_pipeline_inner(frames, opts, progress, cancel)
+    run_pipeline_inner(frames, opts, progress, cancel, None)
 }
 
-/// Run pipeline with optional GPU acceleration (available with `preview` feature).
 #[cfg(feature = "preview")]
+fn gpu_tile_dims(opts: &GenerateOptions, first_frame: &ImageRgba8) -> (u32, u32) {
+    let (cols, rows) = opts.atlas_dims;
+    let aspect = f64::from(first_frame.width) / f64::from(first_frame.height);
+    crate::pipeline::atlas_layout::compute_tile_dims(opts.atlas_resolution, cols, rows, aspect)
+}
+
+#[cfg(feature = "preview")]
+fn gpu_tail_flow(
+    plan: &crate::pipeline::analyze::BatchPlan,
+    premul_frames: &[ImageRgba8],
+    opts: &GenerateOptions,
+    gpu: &crate::gpu::GpuPipeline,
+    first_frame: &ImageRgba8,
+) -> Flow {
+    let (tw, th) = gpu_tile_dims(opts, first_frame);
+    if !opts.is_loop {
+        return Flow::zeros(tw, th);
+    }
+    let batch_rgba: Vec<ImageRgba8> = if let Some(ref tail) = plan.tail_batch {
+        let mut v: Vec<ImageRgba8> = tail.iter().map(|&i| premul_frames[i].clone()).collect();
+        v.push(first_frame.clone());
+        v
+    } else if let Some(ref lvb) = plan.last_valid_batch {
+        if let Some(&last) = lvb.last() {
+            vec![premul_frames[last].clone(), first_frame.clone()]
+        } else {
+            return Flow::zeros(tw, th);
+        }
+    } else {
+        return Flow::zeros(tw, th);
+    };
+    if batch_rgba.len() < 2 {
+        return Flow::zeros(tw, th);
+    }
+    gpu.compute_flow(&batch_rgba, opts)
+        .unwrap_or_else(|_| Flow::zeros(tw, th))
+}
+
 pub fn run_pipeline_with_gpu(
     frames: &dyn crate::io::FrameSource,
     opts: &GenerateOptions,
     progress: &(dyn Fn(Progress) + Sync),
     cancel: &(dyn Fn() -> bool + Sync),
-    _gpu: Option<&crate::gpu::GpuPipeline>,
+    gpu: Option<&crate::gpu::GpuPipeline>,
 ) -> Result<EncodeResult, PipelineError> {
-    // GPU compute pipeline is experimental and currently disabled.
-    // The CPU pipeline is well-optimized (rayon + SIMD). GPU resize/premultiply
-    // will be added in a future release.
-    run_pipeline_inner(frames, opts, progress, cancel)
+    let effective_gpu = match opts.compute_backend {
+        crate::pipeline::ComputeBackend::Cpu => None,
+        crate::pipeline::ComputeBackend::Gpu | crate::pipeline::ComputeBackend::Auto => gpu,
+    };
+    run_pipeline_inner(frames, opts, progress, cancel, effective_gpu)
 }
 
+// allow(too_many_lines): pipeline orchestration is a single sequential workflow
+#[allow(clippy::too_many_lines)]
 fn run_pipeline_inner(
     frames: &dyn crate::io::FrameSource,
     opts: &GenerateOptions,
     progress: &(dyn Fn(Progress) + Sync),
     cancel: &(dyn Fn() -> bool + Sync),
+    gpu: Option<&crate::gpu::GpuPipeline>,
 ) -> Result<EncodeResult, PipelineError> {
     // 1. Validate: need >= 2 frames
     if frames.len() < 2 {
@@ -288,21 +329,68 @@ fn run_pipeline_inner(
             });
         }
     };
-    let mut flows: Vec<Flow> = process_batch_slice_with_progress(
-        &plan.batches,
-        &gray_frames[..frames_needed],
-        opts,
-        &|| !cancel(),
-        &flow_progress,
-    );
-    if cancel() {
-        return Err(PipelineError::Cancelled);
-    }
-    flows.push(build_tail_flow_from_plan(
-        &plan,
-        &gray_frames[..frames_needed],
-        opts,
-    ));
+    let use_gpu = match opts.compute_backend {
+        crate::pipeline::ComputeBackend::Cpu => false,
+        crate::pipeline::ComputeBackend::Gpu | crate::pipeline::ComputeBackend::Auto => {
+            gpu.is_some()
+        }
+    };
+    let mut flows: Vec<Flow> = if use_gpu {
+        let gpu = gpu.unwrap();
+        // GPU path: process all batches in parallel using Rayon
+        let first_rgba = &premul_frames[0];
+        let mut gpu_flows: Vec<Flow> = plan
+            .batches
+            .par_iter()
+            .map(|batch_indices| {
+                if cancel() {
+                    return None;
+                }
+                let batch_rgba: Vec<ImageRgba8> = batch_indices
+                    .iter()
+                    .map(|&i| premul_frames[i].clone())
+                    .collect();
+                match gpu.compute_flow(&batch_rgba, opts) {
+                    Ok(flow) => {
+                        flow_progress();
+                        Some(flow)
+                    }
+                    Err(e) => {
+                        eprintln!("[gpu] flow error in batch: {e}");
+                        None
+                    }
+                }
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .flatten()
+            .collect();
+        // Tail batch (single call, negligible overhead)
+        if cancel() {
+            return Err(PipelineError::Cancelled);
+        }
+        let tail_flow = gpu_tail_flow(&plan, &premul_frames, opts, gpu, first_rgba);
+        gpu_flows.push(tail_flow);
+        gpu_flows
+    } else {
+        // CPU path
+        let mut cpu_flows = process_batch_slice_with_progress(
+            &plan.batches,
+            &gray_frames[..frames_needed],
+            opts,
+            &|| !cancel(),
+            &flow_progress,
+        );
+        if cancel() {
+            return Err(PipelineError::Cancelled);
+        }
+        cpu_flows.push(build_tail_flow_from_plan(
+            &plan,
+            &gray_frames[..frames_needed],
+            opts,
+        ));
+        cpu_flows
+    };
     progress(Progress::Stage {
         name: "Computing flow".to_string(),
         fraction: 0.85,

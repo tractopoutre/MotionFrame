@@ -703,8 +703,8 @@ impl<P: Platform> MotionFrameApp<P> {
                 );
                 self.sync_output_detent(&canonical_layouts, n_input);
                 let trim_tail_before = self.options.trim_tail_for_exact_output_count;
-                let sequence_loaded = !self.frames.is_empty()
-                    && self.options.input_atlas_dims.is_none();
+                let sequence_loaded =
+                    !self.frames.is_empty() && self.options.input_atlas_dims.is_none();
                 input_panel::show_options(
                     &mut body_ui,
                     &mut self.options,

@@ -1736,6 +1736,7 @@ dependencies = [
  "flate2",
  "image",
  "naga",
+ "pollster",
  "rayon",
  "serde",
  "serde_json",

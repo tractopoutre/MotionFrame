@@ -83,6 +83,9 @@ pub struct ConvertArgs {
     /// Use flat motion packing.
     #[arg(long = "flat-pack")]
     pub flat_pack: bool,
+    /// Compute backend: auto (default), cpu, gpu.
+    #[arg(long = "compute-backend")]
+    pub compute_backend: Option<String>,
     /// Analyze skipped source frames for accumulated motion.
     #[arg(
         long = "analyze-skipped-frames",
@@ -152,6 +155,17 @@ pub enum ProgressArg {
 }
 
 impl ConvertArgs {
+    pub fn compute_backend(&self) -> Option<motionframe_engine::pipeline::ComputeBackend> {
+        self.compute_backend
+            .as_ref()
+            .and_then(|s| match s.as_str() {
+                "cpu" => Some(motionframe_engine::pipeline::ComputeBackend::Cpu),
+                "gpu" => Some(motionframe_engine::pipeline::ComputeBackend::Gpu),
+                "auto" => Some(motionframe_engine::pipeline::ComputeBackend::Auto),
+                _ => None,
+            })
+    }
+
     pub const fn is_loop(&self) -> Option<bool> {
         if self.loop_flag {
             Some(true)
@@ -234,9 +248,12 @@ mod tests {
     fn parse_suffix_flags() {
         let args = ConvertArgs::parse_from([
             "test",
-            "--suffix-color", "",
-            "--suffix-motion", "_vec",
-            "--suffix-meta", "_metadata",
+            "--suffix-color",
+            "",
+            "--suffix-motion",
+            "_vec",
+            "--suffix-meta",
+            "_metadata",
         ]);
         assert_eq!(args.output_suffix_color, Some("".into()));
         assert_eq!(args.output_suffix_motion, Some("_vec".into()));

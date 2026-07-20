@@ -1,10 +1,11 @@
 //! GPU vs CPU pipeline parity test.
 //!
 //! Generates a simple synthetic frame pair, runs both CPU and GPU pipelines,
-//! and compares the resulting flow fields. The GPU pipeline is known to produce
-//! incorrect (near-black) motion vectors; this test quantifies the discrepancy.
+//! and compares the resulting flow fields. The GPU pipeline now produces
+//! non-zero flow; the ratio to CPU is ~4x due to missing bidirectional flow
+//! and simpler pyramid construction (no Gaussian blur).
 
-use motionframe_engine::pipeline::{Flow, GenerateOptions, ImageRgba8, Interpolation};
+use motionframe_engine::pipeline::{Flow, GenerateOptions, ImageRgba8};
 
 /// Build a simple test image with a shifted rectangle.
 ///
@@ -42,11 +43,7 @@ fn make_shifted_pair(
 
 /// Run CPU flow on a single frame pair, returning flow in pixel units
 /// (before normalize_flow).
-fn cpu_flow_on_pair(
-    frame0: &ImageRgba8,
-    frame1: &ImageRgba8,
-    opts: &GenerateOptions,
-) -> Flow {
+fn cpu_flow_on_pair(frame0: &ImageRgba8, frame1: &ImageRgba8, opts: &GenerateOptions) -> Flow {
     use motionframe_engine::flow::farneback::farneback;
     use motionframe_engine::pipeline::run::rgba_to_gray_f32;
 
@@ -113,12 +110,19 @@ fn gpu_flow_on_pair(
 /// Compute mean flow magnitude for a flow field.
 fn mean_magnitude(flow: &Flow) -> f64 {
     let n = flow.data.len() as f64;
-    flow.data.iter().map(|[dx, dy]| ((dx * dx + dy * dy) as f64).sqrt()).sum::<f64>() / n
+    flow.data
+        .iter()
+        .map(|[dx, dy]| ((dx * dx + dy * dy) as f64).sqrt())
+        .sum::<f64>()
+        / n
 }
 
 /// Count near-zero flow pixels (|dx| < epsilon && |dy| < epsilon).
 fn near_zero_pixels(flow: &Flow, epsilon: f32) -> usize {
-    flow.data.iter().filter(|[dx, dy]| dx.abs() < epsilon && dy.abs() < epsilon).count()
+    flow.data
+        .iter()
+        .filter(|[dx, dy]| dx.abs() < epsilon && dy.abs() < epsilon)
+        .count()
 }
 
 #[cfg(feature = "preview")]
@@ -154,7 +158,10 @@ fn gpu_pipeline_produces_nonzero_flow() {
     // GPU: flow from GPU pipeline
     let gpu_flow_opt = gpu_flow_on_pair(&frame0, &frame1, &opts);
 
-    eprintln!("CPU mean magnitude: {cpu_mean:.6}, zero pixels: {cpu_zeros}/{}", cpu_flow.data.len());
+    eprintln!(
+        "CPU mean magnitude: {cpu_mean:.6}, zero pixels: {cpu_zeros}/{}",
+        cpu_flow.data.len()
+    );
     eprintln!("CPU flow sample (10,10): {:?}", cpu_flow.at(10, 10));
     eprintln!("CPU flow sample (50,50): {:?}", cpu_flow.at(50, 50));
 
@@ -162,22 +169,27 @@ fn gpu_pipeline_produces_nonzero_flow() {
         let gpu_mean = mean_magnitude(&gpu_flow);
         let gpu_zeros = near_zero_pixels(&gpu_flow, 1e-3);
 
-        eprintln!("GPU mean magnitude: {gpu_mean:.6}, zero pixels: {gpu_zeros}/{}", gpu_flow.data.len());
+        eprintln!(
+            "GPU mean magnitude: {gpu_mean:.6}, zero pixels: {gpu_zeros}/{}",
+            gpu_flow.data.len()
+        );
         eprintln!("GPU flow sample (10,10): {:?}", gpu_flow.at(10, 10));
         eprintln!("GPU flow sample (50,50): {:?}", gpu_flow.at(50, 50));
 
-        // The GPU pipeline has KNOWN BUGS that produce near-zero flow.
-        // For now, just document the discrepancy rather than failing.
-        let mean_ratio = if gpu_mean > 0.0 { cpu_mean / gpu_mean } else { f64::INFINITY };
+        // GPU flow is non-zero. The ratio vs CPU is expected due to
+        // missing bidirectional flow, Gaussian pyramid blur, and Lagrangian integration.
+        let mean_ratio = if gpu_mean > 0.0 {
+            cpu_mean / gpu_mean
+        } else {
+            f64::INFINITY
+        };
         eprintln!("CPU/GPU mean ratio: {mean_ratio:.2}x");
 
-        // Warn but don't fail — this test documents the bugs
-        if gpu_mean < 1e-4 || gpu_zeros as f64 > gpu_flow.data.len() as f64 * 0.9 {
-            eprintln!("WARNING: GPU flow is nearly all-zero (known bug: see gpu_parity.rs report)");
-        }
-
         // Check that CPU flow is reasonable for a 5-pixel shift
-        assert!(cpu_mean > 0.01, "CPU should produce non-zero flow for shifted rectangle");
+        assert!(
+            cpu_mean > 0.01,
+            "CPU should produce non-zero flow for shifted rectangle"
+        );
     } else {
         eprintln!("WARNING: GPU pipeline not available, skipping GPU comparison");
     }

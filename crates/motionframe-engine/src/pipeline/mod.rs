@@ -74,6 +74,28 @@ pub struct Sequence {
     pub source_paths: Vec<PathBuf>,
 }
 
+/// Which compute backend to use for optical flow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum ComputeBackend {
+    /// Try GPU, fall back to CPU on failure.
+    #[default]
+    Auto,
+    /// Always use CPU.
+    Cpu,
+    /// Always use GPU; return error if unavailable.
+    Gpu,
+}
+
+impl std::fmt::Display for ComputeBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Auto => write!(f, "auto"),
+            Self::Cpu => write!(f, "cpu"),
+            Self::Gpu => write!(f, "gpu"),
+        }
+    }
+}
+
 /// Full pipeline options — one field per UI control.
 ///
 /// Internal algorithm choices (Heun's integration, bicubic remap, non-loop
@@ -95,6 +117,9 @@ pub struct GenerateOptions {
     pub tile_pixel_width: u32,
     pub atlas_dims: (u32, u32),
     pub stagger_pack: bool,
+    /// Which compute backend to use for optical flow. Default is `Auto` (try GPU, fall back to CPU).
+    #[serde(default)]
+    pub compute_backend: ComputeBackend,
     pub analyze_skipped_frames: bool,
     /// Output color atlas with premultiplied alpha. Default off — most engines
     /// expect straight (non-premultiplied) RGBA. Internal flow analysis still
@@ -234,6 +259,7 @@ impl Default for GenerateOptions {
             tile_pixel_width: 128,
             atlas_dims: (8, 8),
             stagger_pack: false,
+            compute_backend: ComputeBackend::Auto,
             analyze_skipped_frames: true,
             premultiplied_alpha: false, // most game engines expect straight alpha
             farneback: FarnebackParams::default(),
@@ -271,7 +297,10 @@ mod tests {
     #[test]
     fn output_name_format_defaults() {
         let opts = GenerateOptions::default();
-        assert_eq!(opts.output_name_format, "[basename]_[cols]x[rows][suffix].[ext]");
+        assert_eq!(
+            opts.output_name_format,
+            "[basename]_[cols]x[rows][suffix].[ext]"
+        );
         assert_eq!(opts.output_name_basename, "");
         assert_eq!(opts.output_suffix_color, "");
         assert_eq!(opts.output_suffix_motion, "_MV");

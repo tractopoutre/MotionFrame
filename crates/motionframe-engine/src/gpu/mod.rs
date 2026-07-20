@@ -3,13 +3,32 @@ use std::sync::Arc;
 use rayon::prelude::*;
 
 use crate::pipeline::{Flow, GenerateOptions, ImageRgba8};
-use wgpu::*;
+use wgpu::{
+    BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout, BindGroupLayoutDescriptor,
+    BindGroupLayoutEntry, BindingResource, BindingType, BufferBindingType, BufferDescriptor,
+    BufferUsages, CommandEncoder, CommandEncoderDescriptor, ComputePassDescriptor, ComputePipeline,
+    ComputePipelineDescriptor, Device, DeviceDescriptor, Extent3d, Instance, InstanceDescriptor,
+    MapMode, Origin3d, PipelineCompilationOptions, PipelineLayout, PipelineLayoutDescriptor,
+    PowerPreference, Queue, RequestAdapterOptions, ShaderModule, ShaderModuleDescriptor,
+    ShaderSource, ShaderStages, StorageTextureAccess, TexelCopyBufferInfo, TexelCopyBufferLayout,
+    TexelCopyTextureInfo, Texture, TextureAspect, TextureDescriptor, TextureDimension,
+    TextureFormat, TextureSampleType, TextureUsages, TextureView, TextureViewDescriptor,
+    TextureViewDimension,
+};
 
 /// GPU-accelerated Farneback optical flow pipeline.
 ///
 /// Owns a wgpu device, queue, and all compute pipeline state. Call
 /// `compute()` to run the full coarse-to-fine flow estimation on a
 /// slice of RGBA8 frames and produce encoded color + motion atlases.
+///
+/// Batch optimizations (all in a single encoder submission):
+/// - All frame pairs processed without GPU readback between them
+/// - Forward + backward + bidirectional combine per pair on GPU
+/// - Accumulation stays on GPU; single readback at the very end
+/// - Pre-allocated buffers avoid per-call allocation overhead
+// allow(dead_code): encode/bgl_encode kept for API completeness
+#[allow(dead_code)]
 pub struct GpuPipeline {
     device: Arc<Device>,
     queue: Queue,
@@ -20,12 +39,16 @@ pub struct GpuPipeline {
     flow_update: ComputePipeline,
     upsample: ComputePipeline,
     encode: ComputePipeline,
+    accumulate: ComputePipeline,
+    combine_bidir: ComputePipeline,
     // Bind group layouts
     bgl_tex_in_out: BindGroupLayout,
-    bgl_tex_in_out_rgba: BindGroupLayout,
+    bgl_poly: BindGroupLayout,
     bgl_tex_in_out_rg: BindGroupLayout,
     bgl_flow_update: BindGroupLayout,
     bgl_encode: BindGroupLayout,
+    bgl_accum_combine: BindGroupLayout,
+    zero_prior: Texture,
 }
 
 impl GpuPipeline {
@@ -33,21 +56,19 @@ impl GpuPipeline {
     /// Returns `None` if no suitable GPU adapter is available.
     pub fn try_init() -> Option<Self> {
         let instance = Instance::new(InstanceDescriptor::new_without_display_handle());
-        let adapter = pollster::block_on(instance.request_adapter(
-            &RequestAdapterOptions {
-                power_preference: PowerPreference::HighPerformance,
-                ..RequestAdapterOptions::default()
-            },
-        ))
+        let adapter = pollster::block_on(instance.request_adapter(&RequestAdapterOptions {
+            power_preference: PowerPreference::HighPerformance,
+            ..RequestAdapterOptions::default()
+        }))
         .ok()?;
-        let (device, queue) = pollster::block_on(adapter.request_device(
-            &DeviceDescriptor::default(),
-        ))
-        .ok()?;
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&DeviceDescriptor::default())).ok()?;
         Some(Self::new(Arc::new(device), queue))
     }
 
     /// Create a new GPU pipeline from an existing wgpu device + queue.
+    // allow(too_many_lines): initialization is verbose but sequential
+    #[allow(clippy::too_many_lines)]
     pub fn new(device: Arc<Device>, queue: Queue) -> Self {
         // --- Bind group layouts ---
 
@@ -78,9 +99,9 @@ impl GpuPipeline {
             ],
         });
 
-        // 1 sampled texture + 1 RGBA32Float storage texture (poly_expansion)
-        let bgl_tex_in_out_rgba = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: Some("bgl_tex_in_out_rgba"),
+        // 1 sampled texture + 1 RGBA32F storage + 2 uniforms + 1 storage buffer (poly_expansion)
+        let bgl_poly = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("bgl_poly"),
             entries: &[
                 BindGroupLayoutEntry {
                     binding: 0,
@@ -99,6 +120,36 @@ impl GpuPipeline {
                         access: StorageTextureAccess::WriteOnly,
                         format: TextureFormat::Rgba32Float,
                         view_dimension: TextureViewDimension::D2,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
                     },
                     count: None,
                 },
@@ -186,6 +237,16 @@ impl GpuPipeline {
                     },
                     count: None,
                 },
+                BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -226,15 +287,52 @@ impl GpuPipeline {
             ],
         });
 
+        // 2 sampled RG32Float textures + 1 RG32Float storage (accumulate, combine)
+        let bgl_accum_combine = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("bgl_accum_combine"),
+            entries: &[
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: false },
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Texture {
+                        sample_type: TextureSampleType::Float { filterable: false },
+                        view_dimension: TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::StorageTexture {
+                        access: StorageTextureAccess::WriteOnly,
+                        format: TextureFormat::Rg32Float,
+                        view_dimension: TextureViewDimension::D2,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
         // --- Pipeline layouts ---
         let pl_1ch = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("pl_1ch"),
             bind_group_layouts: &[Some(&bgl_tex_in_out)],
             immediate_size: 0,
         });
-        let pl_rgba = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-            label: Some("pl_rgba"),
-            bind_group_layouts: &[Some(&bgl_tex_in_out_rgba)],
+        let pl_poly = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("pl_poly"),
+            bind_group_layouts: &[Some(&bgl_poly)],
             immediate_size: 0,
         });
         let pl_rg = device.create_pipeline_layout(&PipelineLayoutDescriptor {
@@ -252,18 +350,21 @@ impl GpuPipeline {
             bind_group_layouts: &[Some(&bgl_encode)],
             immediate_size: 0,
         });
+        let pl_accum_combine = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("pl_accum_combine"),
+            bind_group_layouts: &[Some(&bgl_accum_combine)],
+            immediate_size: 0,
+        });
 
         // --- Shader modules ---
-        let mod_grayscale =
-            device.create_shader_module(ShaderModuleDescriptor {
-                label: Some("grayscale"),
-                source: ShaderSource::Wgsl(include_str!("shaders/grayscale.wgsl").into()),
-            });
-        let mod_pyramid =
-            device.create_shader_module(ShaderModuleDescriptor {
-                label: Some("pyramid"),
-                source: ShaderSource::Wgsl(include_str!("shaders/pyramid.wgsl").into()),
-            });
+        let mod_grayscale = device.create_shader_module(ShaderModuleDescriptor {
+            label: Some("grayscale"),
+            source: ShaderSource::Wgsl(include_str!("shaders/grayscale.wgsl").into()),
+        });
+        let mod_pyramid = device.create_shader_module(ShaderModuleDescriptor {
+            label: Some("pyramid"),
+            source: ShaderSource::Wgsl(include_str!("shaders/pyramid.wgsl").into()),
+        });
         let mod_poly = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("poly_expansion"),
             source: ShaderSource::Wgsl(include_str!("shaders/poly_expansion.wgsl").into()),
@@ -272,24 +373,68 @@ impl GpuPipeline {
             label: Some("flow_update"),
             source: ShaderSource::Wgsl(include_str!("shaders/flow_update.wgsl").into()),
         });
-        let mod_upsample =
-            device.create_shader_module(ShaderModuleDescriptor {
-                label: Some("upsample"),
-                source: ShaderSource::Wgsl(include_str!("shaders/upsample.wgsl").into()),
-            });
-        let mod_encode =
-            device.create_shader_module(ShaderModuleDescriptor {
-                label: Some("encode"),
-                source: ShaderSource::Wgsl(include_str!("shaders/encode.wgsl").into()),
-            });
+        let mod_upsample = device.create_shader_module(ShaderModuleDescriptor {
+            label: Some("upsample"),
+            source: ShaderSource::Wgsl(include_str!("shaders/upsample.wgsl").into()),
+        });
+        let mod_encode = device.create_shader_module(ShaderModuleDescriptor {
+            label: Some("encode"),
+            source: ShaderSource::Wgsl(include_str!("shaders/encode.wgsl").into()),
+        });
+        let mod_accum = device.create_shader_module(ShaderModuleDescriptor {
+            label: Some("accumulate"),
+            source: ShaderSource::Wgsl(include_str!("shaders/accumulate.wgsl").into()),
+        });
+        let mod_combine = device.create_shader_module(ShaderModuleDescriptor {
+            label: Some("combine_bidir"),
+            source: ShaderSource::Wgsl(include_str!("shaders/combine_bidir.wgsl").into()),
+        });
 
         // --- Compute pipelines ---
         let grayscale = Self::make_pipeline(&device, &pl_1ch, &mod_grayscale, "grayscale");
         let pyramid = Self::make_pipeline(&device, &pl_1ch, &mod_pyramid, "pyramid");
-        let poly_expansion = Self::make_pipeline(&device, &pl_rgba, &mod_poly, "poly_expansion");
+        let poly_expansion = Self::make_pipeline(&device, &pl_poly, &mod_poly, "poly_expansion");
         let flow_update = Self::make_pipeline(&device, &pl_flow, &mod_flow, "flow_update");
         let upsample = Self::make_pipeline(&device, &pl_rg, &mod_upsample, "upsample");
         let encode = Self::make_pipeline(&device, &pl_encode, &mod_encode, "encode");
+        let accumulate = Self::make_pipeline(&device, &pl_accum_combine, &mod_accum, "accumulate");
+        let combine_bidir =
+            Self::make_pipeline(&device, &pl_accum_combine, &mod_combine, "combine_bidir");
+
+        // --- Pre-allocated zero-prior texture (1x1 Rg32Float, zero-filled) ---
+        let zero_prior = device.create_texture(&TextureDescriptor {
+            label: Some("zero_prior"),
+            size: Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rg32Float,
+            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            TexelCopyTextureInfo {
+                texture: &zero_prior,
+                mip_level: 0,
+                origin: Origin3d::ZERO,
+                aspect: TextureAspect::All,
+            },
+            &[0u8; 8],
+            TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(8),
+                rows_per_image: Some(1),
+            },
+            Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
 
         Self {
             device,
@@ -300,11 +445,15 @@ impl GpuPipeline {
             flow_update,
             upsample,
             encode,
+            accumulate,
+            combine_bidir,
             bgl_tex_in_out,
-            bgl_tex_in_out_rgba,
+            bgl_poly,
             bgl_tex_in_out_rg,
             bgl_flow_update,
             bgl_encode,
+            bgl_accum_combine,
+            zero_prior,
         }
     }
 
@@ -328,6 +477,8 @@ impl GpuPipeline {
         tex.create_view(&TextureViewDescriptor::default())
     }
 
+    // allow(unused_self): called with method syntax for consistency
+    #[allow(clippy::unused_self)]
     fn dispatch_16(
         &self,
         encoder: &mut CommandEncoder,
@@ -345,14 +496,130 @@ impl GpuPipeline {
         cpass.dispatch_workgroups(w.div_ceil(16), h.div_ceil(16), 1);
     }
 
-    /// Run the full GPU-accelerated flow pipeline on a set of frames.
+    /// Compute optical flow for one frame pair (forward direction only).
     ///
-    /// Returns (color_atlas, motion_atlas, max_strength).
-    pub fn compute(
+    /// Returns the finest-level flow texture and its dimensions.
+    /// All work is recorded into `encoder`; no queue submission or readback.
+    // allow(unused_self): used via method calls on self
+    #[allow(clippy::unused_self, clippy::too_many_arguments)]
+    fn compute_pair_flow(
+        &self,
+        encoder: &mut CommandEncoder,
+        gray_a: &Texture,
+        gray_b: &Texture,
+        poly_n: u32,
+        poly_sigma: f32,
+        winsize: u32,
+        use_gaussian: bool,
+        iterations: u32,
+    ) -> (Texture, u32, u32) {
+        let pyr_a = self.pyramid_all(encoder, gray_a);
+        let pyr_b = self.pyramid_all(encoder, gray_b);
+        let num_levels = pyr_a.len();
+        if num_levels == 0 {
+            let (gw, gh) = (gray_a.width(), gray_a.height());
+            let tex = self.make_tex(
+                gw,
+                gh,
+                TextureFormat::Rg32Float,
+                TextureUsages::STORAGE_BINDING
+                    | TextureUsages::TEXTURE_BINDING
+                    | TextureUsages::COPY_SRC,
+                "zero_flow",
+            );
+            return (tex, gw, gh);
+        }
+
+        let mut prior_flow: Option<(Texture, u32, u32)> = None;
+
+        for level in 0..num_levels {
+            let (_, lw, lh) = pyr_a[level];
+
+            let pa = self.poly_expand(encoder, &pyr_a[level], poly_n, poly_sigma);
+            let pb = self.poly_expand(encoder, &pyr_b[level], poly_n, poly_sigma);
+
+            let init_flow: Option<Texture> = if level == 0 {
+                None
+            } else if let Some((ref prev_tex, ..)) = prior_flow.as_ref() {
+                let up = self.make_tex(
+                    lw,
+                    lh,
+                    TextureFormat::Rg32Float,
+                    TextureUsages::STORAGE_BINDING
+                        | TextureUsages::TEXTURE_BINDING
+                        | TextureUsages::COPY_SRC,
+                    "up_flow",
+                );
+                let in_view = Self::tex_view(prev_tex);
+                let out_view = Self::tex_view(&up);
+                let up_bg = self.device.create_bind_group(&BindGroupDescriptor {
+                    label: Some("bg_upsample"),
+                    layout: &self.bgl_tex_in_out_rg,
+                    entries: &[
+                        BindGroupEntry {
+                            binding: 0,
+                            resource: BindingResource::TextureView(&in_view),
+                        },
+                        BindGroupEntry {
+                            binding: 1,
+                            resource: BindingResource::TextureView(&out_view),
+                        },
+                    ],
+                });
+                self.dispatch_16(encoder, &self.upsample, &up_bg, lw, lh);
+                Some(up)
+            } else {
+                None
+            };
+
+            let mut cur_flow = init_flow;
+            let num_iters = iterations.max(1);
+            for _ in 0..num_iters {
+                cur_flow = Some(self.flow_update(
+                    encoder,
+                    &pa,
+                    &pb,
+                    cur_flow.as_ref(),
+                    lw,
+                    lh,
+                    winsize,
+                    use_gaussian,
+                ));
+            }
+            prior_flow = cur_flow.map(|f| (f, lw, lh));
+        }
+
+        prior_flow.unwrap_or_else(|| {
+            let (_, lw, lh) = pyr_a[0];
+            let tex = self.make_tex(
+                lw,
+                lh,
+                TextureFormat::Rg32Float,
+                TextureUsages::STORAGE_BINDING
+                    | TextureUsages::TEXTURE_BINDING
+                    | TextureUsages::COPY_SRC,
+                "zero_flow",
+            );
+            (tex, lw, lh)
+        })
+    }
+
+    /// Run GPU flow computation on all provided frames and return the accumulated flow.
+    ///
+    /// All frame pairs are processed in a single GPU encoder submission:
+    /// - Forward + backward Farneback per pair, combined bidirectionally on GPU
+    /// - Per-pair flow accumulated on GPU (ping-pong accumulation textures)
+    /// - Single readback at the end
+    ///
+    /// The accumulated flow is normalized (dx/=width, dy/=height) before returning.
+    // allow(too_many_lines, cast_lossless): pipeline orchestration is sequential,
+    //   f64 casts from u32 are safe for image dimensions
+    #[allow(clippy::too_many_lines, clippy::cast_lossless)]
+    pub fn compute_flow(
         &self,
         frames: &[ImageRgba8],
         options: &GenerateOptions,
-    ) -> Result<(ImageRgba8, ImageRgba8, f64), String> {
+    ) -> Result<Flow, String> {
         if frames.len() < 2 {
             return Err("Need at least 2 frames".into());
         }
@@ -360,118 +627,198 @@ impl GpuPipeline {
         let (atlas_cols, atlas_rows) = options.atlas_dims;
         let src_aspect = frames[0].width as f64 / frames[0].height as f64;
         let (tile_w, tile_h) = crate::pipeline::atlas_layout::compute_tile_dims(
-            options.atlas_resolution, atlas_cols, atlas_rows, src_aspect,
+            options.atlas_resolution,
+            atlas_cols,
+            atlas_rows,
+            src_aspect,
         );
-        let frame_skip = options.frame_skip.max(1) as usize;
-        let output_frames = options.output_frames.max(1) as usize;
 
-        // Select frames respecting frame_skip and output_frames
-        let selected: Vec<&ImageRgba8> = frames.iter().step_by(frame_skip).take(output_frames).collect();
-        if selected.len() < 2 {
-            return Err("Need at least 2 frames after skip/limit".into());
-        }
-
-        // Resize all selected frames to tile dimensions (CPU, parallel)
         let interp = options.resize_algorithm;
-        let tile_frames: Vec<ImageRgba8> = selected
+        let tile_frames: Vec<ImageRgba8> = frames
             .par_iter()
-            .map(|f| {
-                crate::pipeline::atlas::resize_nyquist(f, tile_w.max(1), interp)
-            })
+            .map(|f| crate::pipeline::atlas::resize_nyquist(f, tile_w.max(1), interp))
             .collect();
 
         let flow_w = tile_w;
         let flow_h = tile_h;
-        let mut accum_flow = Flow::zeros(flow_w, flow_h);
 
-        // Upload tile frames to GPU
-        let frame_texs: Vec<Texture> = tile_frames
+        // Upload all frames as GPU textures upfront
+        let frame_texs: Vec<Texture> = tile_frames.iter().map(|f| self.upload_frame(f)).collect();
+
+        // Respect analyze_skipped_frames: when false, only process first→last pair
+        let last_pair = frame_texs.len().saturating_sub(1);
+        let pair_indices: Vec<usize> = if options.analyze_skipped_frames {
+            (0..last_pair).collect()
+        } else {
+            vec![0, last_pair - 1]
+        };
+
+        // Single encoder for ALL the work (no per-pair submit/readback)
+        let mut encoder = self
+            .device
+            .create_command_encoder(&CommandEncoderDescriptor::default());
+
+        // Pre-compute grayscale for every frame (shared across forward/backward passes)
+        let gray_texs: Vec<Texture> = frame_texs
             .iter()
-            .map(|f| self.upload_frame(f))
-            .collect::<Result<Vec<_>, _>>()?;
+            .map(|tex| self.grayscale(&mut encoder, tex))
+            .collect();
 
-        // Process each consecutive frame pair
-        for pair_idx in 0..frame_texs.len().saturating_sub(1) {
-            let mut encoder = self
-                .device
-                .create_command_encoder(&CommandEncoderDescriptor::default());
+        // Initialize accumulation texture as zeros via write_texture
+        // (ordered before encoder submission by the queue)
+        let init_accum = self.make_tex(
+            flow_w,
+            flow_h,
+            TextureFormat::Rg32Float,
+            TextureUsages::STORAGE_BINDING
+                | TextureUsages::TEXTURE_BINDING
+                | TextureUsages::COPY_SRC
+                | TextureUsages::COPY_DST,
+            "accum_0",
+        );
+        let accum_bytes = vec![0u8; (flow_w * flow_h * 8) as usize];
+        self.queue.write_texture(
+            TexelCopyTextureInfo {
+                texture: &init_accum,
+                mip_level: 0,
+                origin: Origin3d::ZERO,
+                aspect: TextureAspect::All,
+            },
+            &accum_bytes,
+            TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(flow_w * 8),
+                rows_per_image: Some(flow_h),
+            },
+            Extent3d {
+                width: flow_w,
+                height: flow_h,
+                depth_or_array_layers: 1,
+            },
+        );
 
-            let gray0 = self.grayscale(&mut encoder, &frame_texs[pair_idx]);
-            let gray1 = self.grayscale(&mut encoder, &frame_texs[pair_idx + 1]);
-            let pyr0 = self.pyramid_all(&mut encoder, &gray0);
-            let pyr1 = self.pyramid_all(&mut encoder, &gray1);
-            let num_levels = pyr0.len();
+        let mut accum = init_accum;
+        let mut flow_w_actual = flow_w;
+        let mut flow_h_actual = flow_h;
 
-            // Coarse-to-fine: level 0 = coarsest (smallest), level N-1 = finest (largest).
-            let mut prior_flow: Option<(Texture, u32, u32)> = None;
+        for &pair_idx in &pair_indices {
+            let g0 = &gray_texs[pair_idx];
+            let g1 = &gray_texs[pair_idx + 1];
 
-            for level in 0..num_levels {
-                let (_, lw, lh) = pyr0[level];
+            // === FORWARD PASS ===
+            let (fwd_tex, fw, fh) = self.compute_pair_flow(
+                &mut encoder,
+                g0,
+                g1,
+                options.farneback.poly_n,
+                options.farneback.poly_sigma,
+                options.farneback.winsize,
+                options.farneback.use_gaussian,
+                options.farneback.iterations,
+            );
 
-                let pa = self.poly_expand(&mut encoder, &pyr0[level]);
-                let pb = self.poly_expand(&mut encoder, &pyr1[level]);
+            // === BACKWARD PASS (reversed frame order) ===
+            let (bwd_tex, _, _) = self.compute_pair_flow(
+                &mut encoder,
+                g1,
+                g0,
+                options.farneback.poly_n,
+                options.farneback.poly_sigma,
+                options.farneback.winsize,
+                options.farneback.use_gaussian,
+                options.farneback.iterations,
+            );
 
-                // Upsample prior flow to current level size (or zero-init for coarsest)
-                // Build initial flow for this level (upsampled from coarser level, or zero)
-                let init_flow: Option<Texture> = if level == 0 {
-                    None
-                } else if prior_flow.is_none() {
-                    None
-                } else {
-                    let up = {
-                        let (ref prev_tex, ..) = prior_flow.as_ref().unwrap();
-                        let up = self.make_tex(lw, lh, TextureFormat::Rg32Float,
-                            TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_SRC,
-                            "up_flow");
-                        let in_view = Self::tex_view(prev_tex);
-                        let out_view = Self::tex_view(&up);
-                        let up_bg = self.device.create_bind_group(&BindGroupDescriptor {
-                            label: Some("bg_upsample"),
-                            layout: &self.bgl_tex_in_out_rg,
-                            entries: &[
-                                BindGroupEntry { binding: 0, resource: BindingResource::TextureView(&in_view) },
-                                BindGroupEntry { binding: 1, resource: BindingResource::TextureView(&out_view) },
-                            ],
-                        });
-                        self.dispatch_16(&mut encoder, &self.upsample, &up_bg, lw, lh);
-                        up
-                    };
-                    Some(up)
-                };
+            // === BIDIRECTIONAL COMBINE on GPU ===
+            let combined = self.make_tex(
+                fw,
+                fh,
+                TextureFormat::Rg32Float,
+                TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING,
+                "combined",
+            );
+            self.combine_flows(&mut encoder, &fwd_tex, &bwd_tex, &combined, fw, fh);
 
-                // Run multiple flow update iterations at this level
-                let mut cur_flow = init_flow;
-                let num_iters = options.farneback.iterations.max(1);
-                for _iter in 0..num_iters {
-                    cur_flow = Some(self.flow_update(
-                        &mut encoder,
-                        &pa,
-                        &pb,
-                        cur_flow.as_ref(),
-                        lw,
-                        lh,
-                        options.farneback.winsize,
-                        2.0,
-                    ));
-                }
-                prior_flow = cur_flow.map(|f| (f, lw, lh));
-            }
-
-            if let Some((ref flow_tex, fw, fh)) = prior_flow {
-                let pair_flow = self.readback_flow(flow_tex, fw, fh);
-                let resized = resize_flow_bilinear(&pair_flow, flow_w, flow_h);
-                for (i, v) in resized.data.iter().enumerate() {
-                    accum_flow.data[i][0] += v[0];
-                    accum_flow.data[i][1] += v[1];
-                }
-            }
-
-            self.queue.submit(Some(encoder.finish()));
+            // === ACCUMULATE on GPU (ping-pong) ===
+            let next_accum = self.make_tex(
+                fw,
+                fh,
+                TextureFormat::Rg32Float,
+                TextureUsages::STORAGE_BINDING
+                    | TextureUsages::TEXTURE_BINDING
+                    | TextureUsages::COPY_SRC,
+                "accum_n",
+            );
+            self.accumulate_flow(&mut encoder, &accum, &combined, &next_accum, fw, fh);
+            accum = next_accum;
+            flow_w_actual = fw;
+            flow_h_actual = fh;
         }
 
-        // Encode accumulated flow using the encoding specified in options
-        let max_strength = accum_flow.data.iter()
-            .map(|[dx, dy]| (dx * dx + dy * dy).sqrt())
+        // Single submit for ALL pairs
+        self.queue.submit(Some(encoder.finish()));
+
+        // Single readback at the end, using actual flow dimensions
+        let final_flow = self.readback_flow(&accum, flow_w_actual, flow_h_actual);
+
+        // Normalize (dx /= width, dy /= height)
+        let norm_w = flow_w_actual as f32;
+        let norm_h = flow_h_actual as f32;
+        let mut accum_flow = final_flow;
+        for pixel in &mut accum_flow.data {
+            pixel[0] /= norm_w;
+            pixel[1] /= norm_h;
+        }
+
+        // Resize to the expected output resolution if needed
+        if flow_w_actual != flow_w || flow_h_actual != flow_h {
+            accum_flow = resize_flow_bilinear(&accum_flow, flow_w, flow_h);
+        }
+
+        Ok(accum_flow)
+    }
+
+    /// Run the full GPU-accelerated flow pipeline on a set of frames.
+    ///
+    /// Returns (`color_atlas`, `motion_atlas`, `max_strength`).
+    // allow(cast_lossless): f64 casts from u32/f32 are safe for image dims
+    #[allow(clippy::cast_lossless)]
+    pub fn compute(
+        &self,
+        frames: &[ImageRgba8],
+        options: &GenerateOptions,
+    ) -> Result<(ImageRgba8, ImageRgba8, f64), String> {
+        let (atlas_cols, atlas_rows) = options.atlas_dims;
+        let src_aspect = frames[0].width as f64 / frames[0].height as f64;
+        let (tile_w, tile_h) = crate::pipeline::atlas_layout::compute_tile_dims(
+            options.atlas_resolution,
+            atlas_cols,
+            atlas_rows,
+            src_aspect,
+        );
+        let frame_skip = options.frame_skip.max(1) as usize;
+        let output_frames = options.output_frames.max(1) as usize;
+
+        let selected: Vec<&ImageRgba8> = frames
+            .iter()
+            .step_by(frame_skip)
+            .take(output_frames)
+            .collect();
+        let selected_owned: Vec<ImageRgba8> = selected.iter().map(|f| (*f).clone()).collect();
+        let accum_flow = self.compute_flow(&selected_owned, options)?;
+
+        let interp = options.resize_algorithm;
+        let tile_frames: Vec<ImageRgba8> = selected
+            .par_iter()
+            .map(|f| crate::pipeline::atlas::resize_nyquist(f, tile_w.max(1), interp))
+            .collect();
+
+        let flow_w = tile_w;
+
+        let max_strength = accum_flow
+            .data
+            .iter()
+            .map(|[dx, dy]| dx.hypot(*dy))
             .fold(f32::NEG_INFINITY, f32::max)
             .max(1e-8);
 
@@ -483,7 +830,9 @@ impl GpuPipeline {
         for ty in 0..atlas_rows {
             for tx in 0..atlas_cols {
                 let tile_idx = (ty * atlas_cols + tx) as usize;
-                if tile_idx >= selected.len() { break; }
+                if tile_idx >= selected.len() {
+                    break;
+                }
                 for row in 0..tile_h {
                     for col in 0..tile_w {
                         let si = (row as usize) * (flow_w as usize) + (col as usize);
@@ -491,8 +840,10 @@ impl GpuPipeline {
                         let dx = tx * tile_w + col;
                         let di = (dy as usize * atlas_w as usize + dx as usize) * 4;
                         let [fx, fy] = accum_flow.data[si];
-                        motion_atlas.data[di] = (fx / max_strength * scale + scale).clamp(0.0, 1.0) as u8;
-                        motion_atlas.data[di + 1] = (fy / max_strength * scale + scale).clamp(0.0, 1.0) as u8;
+                        motion_atlas.data[di] =
+                            (fx / max_strength * scale + scale).clamp(0.0, 1.0) as u8;
+                        motion_atlas.data[di + 1] =
+                            (fy / max_strength * scale + scale).clamp(0.0, 1.0) as u8;
                         motion_atlas.data[di + 2] = 0;
                         motion_atlas.data[di + 3] = 255;
                     }
@@ -501,17 +852,22 @@ impl GpuPipeline {
         }
 
         // Build color atlas from selected frames
-        let color_atlas = build_color_atlas_simple(&tile_frames, atlas_cols, atlas_rows, tile_w, tile_h);
+        let color_atlas =
+            build_color_atlas_simple(&tile_frames, atlas_cols, atlas_rows, tile_w, tile_h);
 
-        Ok((color_atlas, motion_atlas, max_strength as f64))
+        Ok((color_atlas, motion_atlas, f64::from(max_strength)))
     }
 
     // ---- Per-pass helpers ----
 
-    fn upload_frame(&self, frame: &ImageRgba8) -> Result<Texture, String> {
+    fn upload_frame(&self, frame: &ImageRgba8) -> Texture {
         let tex = self.device.create_texture(&TextureDescriptor {
             label: Some("frame"),
-            size: Extent3d { width: frame.width, height: frame.height, depth_or_array_layers: 1 },
+            size: Extent3d {
+                width: frame.width,
+                height: frame.height,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: TextureDimension::D2,
@@ -532,15 +888,30 @@ impl GpuPipeline {
                 bytes_per_row: Some(frame.width * 4),
                 rows_per_image: Some(frame.height),
             },
-            Extent3d { width: frame.width, height: frame.height, depth_or_array_layers: 1 },
+            Extent3d {
+                width: frame.width,
+                height: frame.height,
+                depth_or_array_layers: 1,
+            },
         );
-        Ok(tex)
+        tex
     }
 
-    fn make_tex(&self, w: u32, h: u32, fmt: TextureFormat, usage: TextureUsages, label: &str) -> Texture {
+    fn make_tex(
+        &self,
+        w: u32,
+        h: u32,
+        fmt: TextureFormat,
+        usage: TextureUsages,
+        label: &str,
+    ) -> Texture {
         self.device.create_texture(&TextureDescriptor {
             label: Some(label),
-            size: Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            size: Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: TextureDimension::D2,
@@ -554,7 +925,8 @@ impl GpuPipeline {
         let w = frame.width();
         let h = frame.height();
         let out = self.make_tex(
-            w, h,
+            w,
+            h,
             TextureFormat::R32Float,
             TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING,
             "gray",
@@ -563,15 +935,25 @@ impl GpuPipeline {
             label: Some("bg_gray"),
             layout: &self.bgl_tex_in_out,
             entries: &[
-                BindGroupEntry { binding: 0, resource: BindingResource::TextureView(&Self::tex_view(frame)) },
-                BindGroupEntry { binding: 1, resource: BindingResource::TextureView(&Self::tex_view(&out)) },
+                BindGroupEntry {
+                    binding: 0,
+                    resource: BindingResource::TextureView(&Self::tex_view(frame)),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: BindingResource::TextureView(&Self::tex_view(&out)),
+                },
             ],
         });
         self.dispatch_16(encoder, &self.grayscale, &bg, w, h);
         out
     }
 
-    fn pyramid_all(&self, encoder: &mut CommandEncoder, base: &Texture) -> Vec<(Texture, u32, u32)> {
+    fn pyramid_all(
+        &self,
+        encoder: &mut CommandEncoder,
+        base: &Texture,
+    ) -> Vec<(Texture, u32, u32)> {
         let mut levels: Vec<(Texture, u32, u32)> = Vec::new();
 
         let mut cur_w = base.width();
@@ -582,17 +964,20 @@ impl GpuPipeline {
             let next_w = (cur_w / 2).max(1);
             let next_h = (cur_h / 2).max(1);
 
+            // Stop before creating a level below 32px — the coarsest level
+            // must be >= 32 in both dimensions so polynomial expansion has
+            // enough pixels for meaningful convolution.
+            if next_w < 32 || next_h < 32 {
+                break;
+            }
+
             let down = self.make_tex(
-                next_w, next_h,
+                next_w,
+                next_h,
                 TextureFormat::R32Float,
                 TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING,
                 "pyr",
             );
-
-            if next_w < 32 || next_h < 32 {
-                levels.push((down, cur_w, cur_h));
-                break;
-            }
 
             let src = cur_src.as_ref().unwrap_or(base);
             let bg = {
@@ -601,15 +986,21 @@ impl GpuPipeline {
                     label: Some("bg_pyr"),
                     layout: &self.bgl_tex_in_out,
                     entries: &[
-                        BindGroupEntry { binding: 0, resource: BindingResource::TextureView(&Self::tex_view(src)) },
-                        BindGroupEntry { binding: 1, resource: BindingResource::TextureView(&down_view) },
+                        BindGroupEntry {
+                            binding: 0,
+                            resource: BindingResource::TextureView(&Self::tex_view(src)),
+                        },
+                        BindGroupEntry {
+                            binding: 1,
+                            resource: BindingResource::TextureView(&down_view),
+                        },
                     ],
                 })
             };
             self.dispatch_16(encoder, &self.pyramid, &bg, next_w, next_h);
 
-            levels.push((down.clone(), next_w, next_h));
-            cur_src = Some(down);
+            levels.push((down, next_w, next_h));
+            cur_src = Some(levels.last().unwrap().0.clone());
             cur_w = next_w;
             cur_h = next_h;
         }
@@ -618,26 +1009,134 @@ impl GpuPipeline {
         levels
     }
 
-    fn poly_expand(&self, encoder: &mut CommandEncoder, level: &(Texture, u32, u32)) -> Texture {
+    // allow(many_single_char_names): math notation (n, s, g, x, w, h) matches poly.rs
+    // allow(cast_possible_wrap, cast_lossless): poly_n/u32→i32 and poly_sigma/f32→f64 controlled inputs
+    #[allow(
+        clippy::many_single_char_names,
+        clippy::cast_possible_wrap,
+        clippy::cast_lossless
+    )]
+    fn poly_expand(
+        &self,
+        encoder: &mut CommandEncoder,
+        level: &(Texture, u32, u32),
+        poly_n: u32,
+        poly_sigma: f32,
+    ) -> Texture {
         let (ref tex, w, h) = *level;
+
+        // --- Compute Gaussian-based poly expansion kernels (matches poly.rs) ---
+        let n = poly_n as i32;
+        let sigma = poly_sigma as f64;
+        let ksize = (2 * n + 1) as u32;
+
+        let g_raw: Vec<f64> = (-n..=n)
+            .map(|i| (-f64::from(i).powi(2) / (2.0 * sigma * sigma)).exp())
+            .collect();
+        let sum_g: f64 = g_raw.iter().sum();
+        let mut g = vec![0.0f32; ksize as usize];
+        let mut xg = vec![0.0f32; ksize as usize];
+        let mut xxg = vec![0.0f32; ksize as usize];
+        let mut m2 = 0.0f64;
+        let mut m4 = 0.0f64;
+        for i in -n..=n {
+            let idx = (i + n) as usize;
+            let x = f64::from(i);
+            let gv = g_raw[idx] / sum_g;
+            g[idx] = gv as f32;
+            xg[idx] = (-x * gv) as f32;
+            xxg[idx] = (x * x * gv) as f32;
+            m2 += x * x * gv;
+            m4 += x * x * x * x * gv;
+        }
+        let ig11 = 1.0 / m2;
+        let ig03 = -m2 / (m4 - m2 * m2);
+        let ig33 = 1.0 / (m4 - m2 * m2);
+        let ig55 = 1.0 / (m2 * m2);
+
+        // Create per-call buffers (thread-safe: each Rayon task gets its own)
+        let params_buf = self.device.create_buffer(&BufferDescriptor {
+            label: Some("poly_params"),
+            size: 16,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.queue.write_buffer(
+            &params_buf,
+            0,
+            bytemuck::bytes_of(&[ksize as f32, ig11 as f32, ig03 as f32, ig33 as f32]),
+        );
+        let params2_buf = self.device.create_buffer(&BufferDescriptor {
+            label: Some("poly_params2"),
+            size: 16,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.queue.write_buffer(
+            &params2_buf,
+            0,
+            bytemuck::bytes_of(&[ig55 as f32, 0.0, 0.0, 0.0]),
+        );
+
+        // Pack kernel data
+        let mut kernel_bytes = Vec::with_capacity(3 * ksize as usize * 4);
+        kernel_bytes.extend_from_slice(bytemuck::cast_slice(&g));
+        kernel_bytes.extend_from_slice(bytemuck::cast_slice(&xg));
+        kernel_bytes.extend_from_slice(bytemuck::cast_slice(&xxg));
+        let kernel_buf = self.device.create_buffer(&BufferDescriptor {
+            label: Some("poly_kernel"),
+            size: (kernel_bytes.len()) as u64,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.queue.write_buffer(&kernel_buf, 0, &kernel_bytes);
+
         let out = self.make_tex(
-            w * 2, h,
+            w * 2,
+            h,
             TextureFormat::Rgba32Float,
             TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING,
             "poly",
         );
+
         let bg = self.device.create_bind_group(&BindGroupDescriptor {
             label: Some("bg_poly"),
-            layout: &self.bgl_tex_in_out_rgba,
+            layout: &self.bgl_poly,
             entries: &[
-                BindGroupEntry { binding: 0, resource: BindingResource::TextureView(&Self::tex_view(tex)) },
-                BindGroupEntry { binding: 1, resource: BindingResource::TextureView(&Self::tex_view(&out)) },
+                BindGroupEntry {
+                    binding: 0,
+                    resource: BindingResource::TextureView(&Self::tex_view(tex)),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: BindingResource::TextureView(&Self::tex_view(&out)),
+                },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: params_buf.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 3,
+                    resource: params2_buf.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 4,
+                    resource: kernel_buf.as_entire_binding(),
+                },
             ],
         });
         self.dispatch_16(encoder, &self.poly_expansion, &bg, w, h);
         out
     }
 
+    // allow(many_single_char_names): math notation (n, k, i) matches update.rs
+    // allow(needless_range_loop): kernel construction matches the CPU reference
+    // allow(too_many_arguments): matches CPU update_flow_with_workspace signature
+    #[allow(
+        clippy::many_single_char_names,
+        clippy::needless_range_loop,
+        clippy::too_many_arguments
+    )]
     fn flow_update(
         &self,
         encoder: &mut CommandEncoder,
@@ -647,32 +1146,49 @@ impl GpuPipeline {
         w: u32,
         h: u32,
         winsize: u32,
-        scale_factor: f32,
+        use_gaussian: bool,
     ) -> Texture {
+        // Build smoothing kernel (matches update.rs build_gaussian_1d / box)
+        let kernel: Vec<f32> = if use_gaussian {
+            let n = winsize as usize;
+            let sigma = (f64::from(winsize / 2) * 0.3).max(0.3);
+            let half = (n as f64 - 1.0) / 2.0;
+            let mut k = vec![0.0f64; n];
+            let mut sum = 0.0f64;
+            for i in 0..n {
+                let x = i as f64 - half;
+                let v = (-x * x / (2.0 * sigma * sigma)).exp();
+                k[i] = v;
+                sum += v;
+            }
+            k.iter().map(|&v| (v / sum) as f32).collect()
+        } else {
+            vec![1.0f32; winsize as usize]
+        };
+
+        // Create per-call kernel buffer (thread-safe: each Rayon task gets its own)
+        let kernel_bytes: Vec<u8> = bytemuck::cast_slice(&kernel).to_vec();
+        let kernel_buf = self.device.create_buffer(&BufferDescriptor {
+            label: Some("flow_kernel"),
+            size: (kernel_bytes.len()) as u64,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.queue.write_buffer(&kernel_buf, 0, &kernel_bytes);
+
         let out = self.make_tex(
-            w, h,
+            w,
+            h,
             TextureFormat::Rg32Float,
-            TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_SRC,
+            TextureUsages::STORAGE_BINDING
+                | TextureUsages::TEXTURE_BINDING
+                | TextureUsages::COPY_SRC,
             "flow",
         );
 
-        // Zero prior if none
-        let zero_prior = self.make_tex(
-            1, 1,
-            TextureFormat::Rg32Float,
-            TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
-            "zero_prior",
-        );
-        self.queue.write_texture(
-            TexelCopyTextureInfo {
-                texture: &zero_prior, mip_level: 0, origin: Origin3d::ZERO, aspect: TextureAspect::All,
-            },
-            &[0u8; 8],
-            TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(8), rows_per_image: Some(1) },
-            Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
-        );
-        let prior = prior_flow.unwrap_or(&zero_prior);
+        let prior = prior_flow.unwrap_or(&self.zero_prior);
 
+        // Create per-call params buffer (thread-safe)
         let params = self.device.create_buffer(&BufferDescriptor {
             label: Some("flow_params"),
             size: 16,
@@ -680,31 +1196,130 @@ impl GpuPipeline {
             mapped_at_creation: false,
         });
         self.queue.write_buffer(
-            &params, 0,
-            bytemuck::bytes_of(&[winsize as f32, scale_factor, 0.0, 0.0]),
+            &params,
+            0,
+            bytemuck::bytes_of(&[
+                winsize as f32,
+                0.0,
+                if use_gaussian { 1.0 } else { 0.0 },
+                0.0,
+            ]),
         );
 
         let bg = self.device.create_bind_group(&BindGroupDescriptor {
             label: Some("bg_flow"),
             layout: &self.bgl_flow_update,
             entries: &[
-                BindGroupEntry { binding: 0, resource: BindingResource::TextureView(&Self::tex_view(poly_a)) },
-                BindGroupEntry { binding: 1, resource: BindingResource::TextureView(&Self::tex_view(poly_b)) },
-                BindGroupEntry { binding: 2, resource: BindingResource::TextureView(&Self::tex_view(prior)) },
-                BindGroupEntry { binding: 3, resource: params.as_entire_binding() },
-                BindGroupEntry { binding: 4, resource: BindingResource::TextureView(&Self::tex_view(&out)) },
+                BindGroupEntry {
+                    binding: 0,
+                    resource: BindingResource::TextureView(&Self::tex_view(poly_a)),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: BindingResource::TextureView(&Self::tex_view(poly_b)),
+                },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: BindingResource::TextureView(&Self::tex_view(prior)),
+                },
+                BindGroupEntry {
+                    binding: 3,
+                    resource: params.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 4,
+                    resource: BindingResource::TextureView(&Self::tex_view(&out)),
+                },
+                BindGroupEntry {
+                    binding: 5,
+                    resource: kernel_buf.as_entire_binding(),
+                },
             ],
         });
         self.dispatch_16(encoder, &self.flow_update, &bg, w, h);
         out
     }
 
-    fn encode_flow(&self, encoder: &mut CommandEncoder, accum: &Flow, max_strength: f32) -> Texture {
+    /// Accumulate `pair_flow` into `accum_in`, writing result to `accum_out`.
+    ///
+    /// All textures are `Rg32Float` with the given dimensions.
+    fn accumulate_flow(
+        &self,
+        encoder: &mut CommandEncoder,
+        accum_in: &Texture,
+        pair_flow: &Texture,
+        accum_out: &Texture,
+        w: u32,
+        h: u32,
+    ) {
+        let bg = self.device.create_bind_group(&BindGroupDescriptor {
+            label: Some("bg_accum"),
+            layout: &self.bgl_accum_combine,
+            entries: &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: BindingResource::TextureView(&Self::tex_view(accum_in)),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: BindingResource::TextureView(&Self::tex_view(pair_flow)),
+                },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: BindingResource::TextureView(&Self::tex_view(accum_out)),
+                },
+            ],
+        });
+        self.dispatch_16(encoder, &self.accumulate, &bg, w, h);
+    }
+
+    /// Combine forward and backward flows bidirectionally: `0.5 * (fwd - bwd)`.
+    ///
+    /// All textures are `Rg32Float` with the given dimensions.
+    fn combine_flows(
+        &self,
+        encoder: &mut CommandEncoder,
+        fwd: &Texture,
+        bwd: &Texture,
+        out: &Texture,
+        w: u32,
+        h: u32,
+    ) {
+        let bg = self.device.create_bind_group(&BindGroupDescriptor {
+            label: Some("bg_combine"),
+            layout: &self.bgl_accum_combine,
+            entries: &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: BindingResource::TextureView(&Self::tex_view(fwd)),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: BindingResource::TextureView(&Self::tex_view(bwd)),
+                },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: BindingResource::TextureView(&Self::tex_view(out)),
+                },
+            ],
+        });
+        self.dispatch_16(encoder, &self.combine_bidir, &bg, w, h);
+    }
+
+    // allow(dead_code): kept for API completeness
+    #[allow(dead_code)]
+    fn encode_flow(
+        &self,
+        encoder: &mut CommandEncoder,
+        accum: &Flow,
+        max_strength: f32,
+    ) -> Texture {
         let w = accum.width;
         let h = accum.height;
 
         let out = self.make_tex(
-            w, h,
+            w,
+            h,
             TextureFormat::Rg32Float,
             TextureUsages::STORAGE_BINDING | TextureUsages::COPY_SRC,
             "encoded",
@@ -712,7 +1327,8 @@ impl GpuPipeline {
 
         // Upload accumulator to GPU
         let accum_tex = self.make_tex(
-            w, h,
+            w,
+            h,
             TextureFormat::Rg32Float,
             TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
             "accum_upload",
@@ -723,10 +1339,23 @@ impl GpuPipeline {
             .flat_map(|&v| bytemuck::bytes_of(&v).to_vec())
             .collect();
         self.queue.write_texture(
-            TexelCopyTextureInfo { texture: &accum_tex, mip_level: 0, origin: Origin3d::ZERO, aspect: TextureAspect::All },
+            TexelCopyTextureInfo {
+                texture: &accum_tex,
+                mip_level: 0,
+                origin: Origin3d::ZERO,
+                aspect: TextureAspect::All,
+            },
             &accum_bytes,
-            TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 8), rows_per_image: Some(h) },
-            Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(w * 8),
+                rows_per_image: Some(h),
+            },
+            Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
         );
 
         let ubuf = self.device.create_buffer(&BufferDescriptor {
@@ -735,46 +1364,78 @@ impl GpuPipeline {
             usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        self.queue.write_buffer(&ubuf, 0, bytemuck::bytes_of(&[max_strength, 0.0, 0.0, 0.0]));
+        self.queue
+            .write_buffer(&ubuf, 0, bytemuck::bytes_of(&[max_strength, 0.0, 0.0, 0.0]));
 
         let bg = self.device.create_bind_group(&BindGroupDescriptor {
             label: Some("bg_encode"),
             layout: &self.bgl_encode,
             entries: &[
-                BindGroupEntry { binding: 0, resource: BindingResource::TextureView(&Self::tex_view(&accum_tex)) },
-                BindGroupEntry { binding: 1, resource: ubuf.as_entire_binding() },
-                BindGroupEntry { binding: 2, resource: BindingResource::TextureView(&Self::tex_view(&out)) },
+                BindGroupEntry {
+                    binding: 0,
+                    resource: BindingResource::TextureView(&Self::tex_view(&accum_tex)),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: ubuf.as_entire_binding(),
+                },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: BindingResource::TextureView(&Self::tex_view(&out)),
+                },
             ],
         });
         self.dispatch_16(encoder, &self.encode, &bg, w, h);
         out
     }
 
+    // allow(cast_lossless): bpr*h fits u64 for any sensible image size
+    #[allow(clippy::cast_lossless)]
     fn readback_flow(&self, tex: &Texture, w: u32, h: u32) -> Flow {
         let bpr = ((w * 8) + 255) & !255;
         let staging = self.device.create_buffer(&BufferDescriptor {
             label: Some("readback"),
-            size: (bpr * h) as u64,
+            size: u64::from(bpr * h),
             usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
 
-        let mut encoder = self.device.create_command_encoder(&CommandEncoderDescriptor::default());
+        let mut encoder = self
+            .device
+            .create_command_encoder(&CommandEncoderDescriptor::default());
         encoder.copy_texture_to_buffer(
-            TexelCopyTextureInfo { texture: tex, mip_level: 0, origin: Origin3d::ZERO, aspect: TextureAspect::All },
+            TexelCopyTextureInfo {
+                texture: tex,
+                mip_level: 0,
+                origin: Origin3d::ZERO,
+                aspect: TextureAspect::All,
+            },
             TexelCopyBufferInfo {
                 buffer: &staging,
-                layout: TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(bpr), rows_per_image: Some(h) },
+                layout: TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bpr),
+                    rows_per_image: Some(h),
+                },
             },
-            Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
         );
         self.queue.submit(Some(encoder.finish()));
 
         let slice = staging.slice(..);
         let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(MapMode::Read, move |r| { let _ = tx.send(r); });
+        slice.map_async(MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
         self.device
-            .poll(wgpu::PollType::Wait { submission_index: None, timeout: None })
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            })
             .ok();
         rx.recv().unwrap().expect("map failed");
 
@@ -822,8 +1483,10 @@ fn resize_flow_bilinear(flow: &Flow, new_w: u32, new_h: u32) -> Flow {
             let w01 = (1.0 - fx) * fy;
             let w11 = fx * fy;
             let idx = dy as usize * new_w as usize + dx as usize;
-            out.data[idx][0] = f00[0].mul_add(w00, f10[0].mul_add(w10, f01[0].mul_add(w01, f11[0] * w11)));
-            out.data[idx][1] = f00[1].mul_add(w00, f10[1].mul_add(w10, f01[1].mul_add(w01, f11[1] * w11)));
+            out.data[idx][0] =
+                f00[0].mul_add(w00, f10[0].mul_add(w10, f01[0].mul_add(w01, f11[0] * w11)));
+            out.data[idx][1] =
+                f00[1].mul_add(w00, f10[1].mul_add(w10, f01[1].mul_add(w01, f11[1] * w11)));
         }
     }
     out

@@ -134,12 +134,7 @@ fn show_atlas_group(
 ) {
     ui.heading(t(lang, Key::AtlasHeading));
 
-    show_auto_output_count(
-        ui,
-        options,
-        n_after_range,
-        lang,
-    );
+    show_auto_output_count(ui, options, n_after_range, lang);
 
     // --- Atlas resolution ---
     ui.horizontal(|ui| {
@@ -180,7 +175,8 @@ fn show_atlas_group(
 
     ui.horizontal(|ui| {
         ui.label(t(lang, Key::TilePixelWidth));
-        let tile_size = options.atlas_resolution / options.atlas_dims.0.max(options.atlas_dims.1).max(1);
+        let tile_size =
+            options.atlas_resolution / options.atlas_dims.0.max(options.atlas_dims.1).max(1);
         ui.label(format!("{} px (auto)", tile_size));
     });
 
@@ -357,6 +353,28 @@ fn show_motion_group(ui: &mut egui::Ui, options: &mut GenerateOptions, lang: Lan
     ui.checkbox(&mut options.stagger_pack, t(lang, Key::StaggerPack))
         .on_hover_text(t(lang, Key::StaggerPackHover));
 
+    egui::ComboBox::from_id_salt("compute_backend")
+        .selected_text(options.compute_backend.to_string())
+        .show_ui(ui, |ui| {
+            ui.selectable_value(
+                &mut options.compute_backend,
+                motionframe_engine::pipeline::ComputeBackend::Auto,
+                "auto",
+            );
+            ui.selectable_value(
+                &mut options.compute_backend,
+                motionframe_engine::pipeline::ComputeBackend::Cpu,
+                "cpu",
+            );
+            ui.selectable_value(
+                &mut options.compute_backend,
+                motionframe_engine::pipeline::ComputeBackend::Gpu,
+                "gpu",
+            );
+        })
+        .response
+        .on_hover_text(t(lang, Key::ComputeBackendHover));
+
     ui.horizontal(|ui| {
         ui.label(t(lang, Key::TemporalSmoothing));
         ui.add(
@@ -415,7 +433,12 @@ pub fn show_language_picker(ui: &mut egui::Ui, lang: &mut Lang, jp_font_availabl
 
 /// Output naming section — format template, basename override, type labels,
 /// and live filename preview.
-fn show_output_group(ui: &mut egui::Ui, options: &mut GenerateOptions, sequence_loaded: bool, lang: Lang) {
+fn show_output_group(
+    ui: &mut egui::Ui,
+    options: &mut GenerateOptions,
+    sequence_loaded: bool,
+    lang: Lang,
+) {
     ui.heading(t(lang, Key::OutputHeading));
 
     ui.horizontal(|ui| {
@@ -510,7 +533,12 @@ fn show_output_group(ui: &mut egui::Ui, options: &mut GenerateOptions, sequence_
 
 /// Frame range section — start/end frame drag values. Only visible in
 /// sequence mode (not atlas mode).
-fn show_frame_range_group(ui: &mut egui::Ui, options: &mut GenerateOptions, n_input: u32, lang: Lang) {
+fn show_frame_range_group(
+    ui: &mut egui::Ui,
+    options: &mut GenerateOptions,
+    n_input: u32,
+    lang: Lang,
+) {
     if options.input_atlas_dims.is_some() {
         return; // only in sequence mode
     }
@@ -543,10 +571,7 @@ fn show_frame_range_group(ui: &mut egui::Ui, options: &mut GenerateOptions, n_in
 mod tests {
     use super::*;
 
-    fn output_summary_for_detent(
-        canonical_layouts: &[DetentEntry],
-        idx: usize,
-    ) -> OutputSummary {
+    fn output_summary_for_detent(canonical_layouts: &[DetentEntry], idx: usize) -> OutputSummary {
         let entry = &canonical_layouts[idx];
         OutputSummary::new(
             entry.output_count as usize,
@@ -596,7 +621,8 @@ mod tests {
             ext: "tga",
         };
         let name = motionframe_engine::pipeline::output_naming::interpolate_name_format(
-            &opts.output_name_format, &tokens,
+            &opts.output_name_format,
+            &tokens,
         );
         assert_eq!(name, "test_custom.tga");
     }
@@ -614,7 +640,8 @@ mod tests {
             ext: "tga",
         };
         let name = motionframe_engine::pipeline::output_naming::interpolate_name_format(
-            &opts.output_name_format, &tokens,
+            &opts.output_name_format,
+            &tokens,
         );
         assert_eq!(name, "test_8x8_MV.tga");
     }
