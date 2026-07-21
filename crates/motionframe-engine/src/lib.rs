@@ -2,6 +2,7 @@
 //!
 //! Disable the `preview` feature to omit wgpu/preview code.
 
+pub mod debug_dump;
 pub mod flow;
 pub mod io;
 pub mod pipeline;

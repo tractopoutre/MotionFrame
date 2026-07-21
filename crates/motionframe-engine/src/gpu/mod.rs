@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use rayon::prelude::*;
 
+use crate::debug_dump;
 use crate::pipeline::{Flow, GenerateOptions, ImageRgba8};
 use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout, BindGroupLayoutDescriptor,
@@ -835,6 +836,18 @@ impl GpuPipeline {
                     options.farneback.iterations,
                 );
 
+                // Debug dump: read back forward+backward flows for first pair
+                if debug_dump::is_enabled() && pair_idx == 0 {
+                    self.queue.submit(Some(encoder.finish()));
+                    let fwd_flow = self.readback_flow(&fwd_tex, fw, fh);
+                    let bwd_flow = self.readback_flow(&bwd_tex, fw, fh);
+                    debug_dump::save_flow(&format!("gpu_pair{pair_idx}_fwd"), &fwd_flow);
+                    debug_dump::save_flow(&format!("gpu_pair{pair_idx}_bwd"), &bwd_flow);
+                    encoder = self
+                        .device
+                        .create_command_encoder(&CommandEncoderDescriptor::default());
+                }
+
                 let combined = self.make_tex(
                     fw, fh,
                     TextureFormat::Rg32Float,
@@ -842,6 +855,16 @@ impl GpuPipeline {
                     "combined",
                 );
                 self.combine_flows(&mut encoder, &fwd_tex, &bwd_tex, &combined, fw, fh);
+
+                // Debug dump: read back combined flow for first batch's first pair
+                if debug_dump::is_enabled() {
+                    self.queue.submit(Some(encoder.finish()));
+                    let pair_flow = self.readback_flow(&combined, fw, fh);
+                    debug_dump::save_flow(&format!("gpu_pair{pair_idx}_combined"), &pair_flow);
+                    encoder = self
+                        .device
+                        .create_command_encoder(&CommandEncoderDescriptor::default());
+                }
 
                 let next_accum = self.make_tex(
                     fw, fh,

@@ -1,6 +1,7 @@
 //! Pipeline analysis: Lagrangian particle accumulator, flow normalization,
 //! L∞ clip, and sliding-overlap batch planning.
 
+use crate::debug_dump;
 use crate::flow::farneback::farneback;
 use crate::pipeline::{Flow, GenerateOptions, ImageF32, MotionVectorEncoding};
 use rayon::prelude::*;
@@ -180,18 +181,17 @@ fn accumulate_displacement(frames: &[&ImageF32], opts: &GenerateOptions) -> Flow
     let h = effective_frames[0].height;
     let mut acc = Flow::zeros(w, h);
 
-    for pair in effective_frames.windows(2) {
-        // Per-step bidirectional combine: run forward and backward
-        // Farneback on the pair and average the two displacement
-        // fields before integrating. Doing this per-pair means
-        // accumulation operates on already-corrected fields, so
-        // per-step Farneback noise can't compound across the batch the
-        // way it does when forward and backward are accumulated
-        // separately and combined only at the output.
+    for (pair_idx, pair) in effective_frames.windows(2).enumerate() {
         let f = farneback(pair[0], pair[1], &opts.farneback);
         let b = farneback(pair[1], pair[0], &opts.farneback);
         let flow = crate::pipeline::bidirectional::combine_bidirectional(&f, &b);
+
+        debug_dump::save_flow(&format!("cpu_pair{pair_idx}_fwd"), &f);
+        debug_dump::save_flow(&format!("cpu_pair{pair_idx}_bwd"), &b);
+        debug_dump::save_flow(&format!("cpu_pair{pair_idx}_combined"), &flow);
+
         apply_step(&mut acc, &flow);
+        debug_dump::save_flow(&format!("cpu_pair{pair_idx}_acc"), &acc);
     }
 
     acc
