@@ -12,6 +12,10 @@ build = "build.rs"
 name = "motionframe"
 path = "src/main.rs"
 
+[[bin]]
+name = "debugdump"
+path = "src/bin/debugdump.rs"
+
 [lib]
 name = "motionframe_desktop"
 path = "src/lib.rs"
