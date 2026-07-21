@@ -609,8 +609,12 @@ impl GpuPipeline {
         use_gaussian: bool,
         iterations: u32,
     ) -> (Texture, u32, u32) {
-        let pyr_a = self.pyramid_all(encoder, gray_a);
-        let pyr_b = self.pyramid_all(encoder, gray_b);
+        let mut pyr_a = self.pyramid_all(encoder, gray_a);
+        let mut pyr_b = self.pyramid_all(encoder, gray_b);
+        // Include the full-resolution base as the finest pyramid level
+        // (matches CPU: level 0 = original, level 1 = first downsample, ...)
+        pyr_a.push((gray_a.clone(), gray_a.width(), gray_a.height()));
+        pyr_b.push((gray_b.clone(), gray_b.width(), gray_b.height()));
         let num_levels = pyr_a.len();
         if num_levels == 0 {
             let (gw, gh) = (gray_a.width(), gray_a.height());
@@ -721,14 +725,11 @@ impl GpuPipeline {
             return Vec::new();
         }
 
-        let (atlas_cols, atlas_rows) = options.atlas_dims;
-        let src_aspect = frames[0].width as f64 / frames[0].height as f64;
-        let (tile_w, tile_h) = crate::pipeline::atlas_layout::compute_tile_dims(
-            options.atlas_resolution,
-            atlas_cols,
-            atlas_rows,
-            src_aspect,
-        );
+        // Use the NATIVE frame resolution for flow computation — no downsampling.
+        // This matches the CPU path which works at the source frame resolution.
+        // The pipeline handles any resolution efficiently.
+        let flow_w = frames[0].width;
+        let flow_h = frames[0].height;
 
         // Collect all unique frame indices needed across all batches + tail
         let mut needed: Vec<usize> = batches.iter().flat_map(|b| b.iter().copied()).collect();
@@ -744,24 +745,15 @@ impl GpuPipeline {
             .map(|&i| (i, self.upload_frame(&frames[i])))
             .collect();
 
-        let flow_w = tile_w;
-        let flow_h = tile_h;
-
         // Single encoder for ALL batch work
         let mut encoder = self
             .device
             .create_command_encoder(&CommandEncoderDescriptor::default());
 
-        // GPU resize to tile size + grayscale for each needed frame
+        // Convert directly to grayscale at native resolution (no resize).
         let mut gray_map: Vec<(usize, Texture)> = Vec::with_capacity(orig_texs.len());
         for &(idx, ref tex) in &orig_texs {
-            let interp = match options.resize_algorithm {
-                crate::pipeline::Interpolation::Nearest => 0u32,
-                crate::pipeline::Interpolation::Linear => 1,
-                _ => 2,
-            };
-            let resized = self.resize_tex(&mut encoder, tex, tile_w.max(1), tile_h.max(1), interp);
-            let gray = self.grayscale(&mut encoder, &resized);
+            let gray = self.grayscale(&mut encoder, tex);
             gray_map.push((idx, gray));
         }
 
@@ -851,7 +843,7 @@ impl GpuPipeline {
                 let combined = self.make_tex(
                     fw, fh,
                     TextureFormat::Rg32Float,
-                    TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING,
+                    TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_SRC,
                     "combined",
                 );
                 self.combine_flows(&mut encoder, &fwd_tex, &bwd_tex, &combined, fw, fh);
